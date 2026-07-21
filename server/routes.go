@@ -5,7 +5,9 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	kubeview "github.com/benc-uk/kubeview"
+	"github.com/benc-uk/kubeview/server/services"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -50,6 +53,10 @@ func (s *KubeviewAPI) AddRoutes(r *chi.Mux) {
 	r.Get("/api/namespaces", s.handleNamespaceList)
 	r.Get("/api/fetch/{namespace}", s.handleFetchData)
 	r.Get("/api/logs/{namespace}/{podname}", s.handlePodLogs)
+	r.Get("/api/resource-types", s.handleResourceTypes)
+	r.Get("/api/operator-config", s.handleOperatorConfig)
+	r.Get("/api/operator-view", s.handleOperatorView)
+	r.Post("/api/graphql", s.handleGraphQLProxy)
 }
 
 // Establish the SSE connection for streaming updates each client
@@ -157,6 +164,132 @@ func (s *KubeviewAPI) handleFetchData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.ReturnJSON(w, data)
+}
+
+// Return discovered resource types so the frontend can build dynamic filter lists
+func (s *KubeviewAPI) handleResourceTypes(w http.ResponseWriter, _ *http.Request) {
+	s.ReturnJSON(w, s.kubeService.GetResourceTypes())
+}
+
+// Return the loaded operator config (or null if none)
+func (s *KubeviewAPI) handleOperatorConfig(w http.ResponseWriter, _ *http.Request) {
+	if s.operatorConfig == nil {
+		s.ReturnJSON(w, nil)
+		return
+	}
+
+	s.ReturnJSON(w, s.operatorConfig)
+}
+
+// Fetch the operator-centric cross-namespace view driven by the operator config
+func (s *KubeviewAPI) handleOperatorView(w http.ResponseWriter, r *http.Request) {
+	if s.operatorConfig == nil {
+		problem.Wrap(404, r.RequestURI, "no operator config",
+			errors.New("no operator config loaded, set OPERATOR_CONFIG env var")).Send(w)
+		return
+	}
+
+	clientID := r.URL.Query().Get("clientID")
+	if clientID == "" {
+		http.Error(w, "clientID is required", http.StatusBadRequest)
+		return
+	}
+
+	log.Println("🔭 Fetching operator view")
+
+	// Register SSE client in all watchNamespaces so it gets live updates
+	s.eventBroker.RemoveFromAllGroups(clientID)
+
+	for _, op := range s.operatorConfig.Operators {
+		for _, ns := range op.WatchNamespaces {
+			s.eventBroker.AddToGroup(clientID, ns)
+		}
+
+		if len(op.WatchNamespaces) == 0 {
+			s.eventBroker.AddToGroup(clientID, op.Namespace)
+		}
+	}
+
+	viewCfg := services.OperatorViewConfig{}
+
+	for _, op := range s.operatorConfig.Operators {
+		entry := services.OperatorViewEntry{
+			CSVPrefix:       op.CSV,
+			Namespace:       op.Namespace,
+			WatchNamespaces: op.WatchNamespaces,
+		}
+
+		for _, ep := range op.Entrypoints {
+			entry.Entrypoints = append(entry.Entrypoints, services.OperatorViewEntrypoint{
+				Kind: ep.Kind,
+				Name: ep.Name,
+			})
+		}
+
+		viewCfg.Operators = append(viewCfg.Operators, entry)
+	}
+
+	for _, el := range s.operatorConfig.ExtraLinks {
+		link := services.OperatorViewExtraLink{
+			From: services.OperatorViewLinkRef{
+				Kind:       el.From.Kind,
+				Name:       el.From.Name,
+				NamePrefix: el.From.NamePrefix,
+			},
+		}
+
+		for _, to := range el.To {
+			link.To = append(link.To, services.OperatorViewLinkRef{
+				Kind:       to.Kind,
+				Name:       to.Name,
+				NamePrefix: to.NamePrefix,
+			})
+		}
+
+		viewCfg.ExtraLinks = append(viewCfg.ExtraLinks, link)
+	}
+
+	result, err := s.kubeService.FetchOperatorViewCached(viewCfg)
+	if err != nil {
+		problem.Wrap(500, r.RequestURI, "operator view fetch", err).Send(w)
+		return
+	}
+
+	s.ReturnJSON(w, result)
+}
+
+// Proxy GraphQL requests to the ocp-resource-monitor API
+func (s *KubeviewAPI) handleGraphQLProxy(w http.ResponseWriter, r *http.Request) {
+	if s.config.GraphQLEndpoint == "" {
+		problem.Wrap(503, r.RequestURI, "graphql not configured",
+			errors.New("GRAPHQL_ENDPOINT env var not set")).Send(w)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		problem.Wrap(400, r.RequestURI, "read body", err).Send(w)
+		return
+	}
+
+	proxyReq, err := http.NewRequestWithContext(r.Context(), "POST", s.config.GraphQLEndpoint, bytes.NewReader(body))
+	if err != nil {
+		problem.Wrap(500, r.RequestURI, "create proxy request", err).Send(w)
+		return
+	}
+
+	proxyReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(proxyReq)
+	if err != nil {
+		problem.Wrap(502, r.RequestURI, "graphql proxy", err).Send(w)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // Pull logs for a specific pod in a namespace

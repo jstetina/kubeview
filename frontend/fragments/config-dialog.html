@@ -43,26 +43,32 @@
           <label class="label">Resource Filters (Use Ctrl or Shift to select multiple)</label>
           <div class="field">
             <div class="select is-multiple is-success is-fullwidth">
-              <select multiple x-model="cfg.resFilter" size="10">
-                <option disabled>• Pods & Deployments:</option>
+              <select multiple x-model="cfg.resFilter" size="14">
+                <option disabled>-- Pods & Deployments:</option>
                 <option value="Pod" :selected="cfg.resFilter.includes('Pod')">Pods</option>
                 <option value="Deployment" :selected="cfg.resFilter.includes('Deployment')">Deployments</option>
                 <option value="StatefulSet" :selected="cfg.resFilter.includes('StatefulSet')">StatefulSets</option>
                 <option value="DaemonSet" :selected="cfg.resFilter.includes('DaemonSet')">DaemonSets</option>
                 <option value="ReplicaSet" :selected="cfg.resFilter.includes('ReplicaSet')">ReplicaSets</option>
-                <option disabled>• Networking:</option>
+                <option disabled>-- Networking:</option>
                 <option value="Service" :selected="cfg.resFilter.includes('Service')">Services</option>
                 <option value="Ingress" :selected="cfg.resFilter.includes('Ingress')">Ingress</option>
-                <option disabled>• Config & Secrets:</option>
+                <option disabled>-- Config & Secrets:</option>
                 <option value="ConfigMap" :selected="cfg.resFilter.includes('ConfigMap')">ConfigMaps</option>
                 <option value="Secret" :selected="cfg.resFilter.includes('Secret')">Secrets</option>
-                <option disabled>• Other Resources:</option>
+                <option disabled>-- Other Resources:</option>
                 <option value="Job" :selected="cfg.resFilter.includes('Job')">Jobs</option>
                 <option value="CronJob" :selected="cfg.resFilter.includes('CronJob')">CronJobs</option>
                 <option value="PersistentVolumeClaim" :selected="cfg.resFilter.includes('PersistentVolumeClaim')">PersistentVolumeClaims</option>
                 <option value="HorizontalPodAutoscaler" :selected="cfg.resFilter.includes('HorizontalPodAutoscaler')">
                   HorizontalPodAutoscalers
                 </option>
+                <template x-if="resourceTypes.filter(rt => !['Pod','Deployment','StatefulSet','DaemonSet','ReplicaSet','Service','Ingress','ConfigMap','Secret','Job','CronJob','PersistentVolumeClaim','HorizontalPodAutoscaler','Endpoints','EndpointSlice','Event','Namespace'].includes(rt.kind)).length > 0">
+                  <option disabled>-- Custom Resources:</option>
+                </template>
+                <template x-for="rt in resourceTypes.filter(rt => !['Pod','Deployment','StatefulSet','DaemonSet','ReplicaSet','Service','Ingress','ConfigMap','Secret','Job','CronJob','PersistentVolumeClaim','HorizontalPodAutoscaler','Endpoints','EndpointSlice','Event','Namespace'].includes(rt.kind))" :key="rt.kind">
+                  <option :value="rt.kind" :selected="cfg.resFilter.includes(rt.kind)" x-text="`${rt.kind} (${rt.group})`"></option>
+                </template>
               </select>
             </div>
           </div>

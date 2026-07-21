@@ -14,28 +14,76 @@ import { graph } from './main.js'
 
 const ICON_PATH = 'public/img/res'
 
+const BUILTIN_ICON_KINDS = new Set([
+  'configmap',
+  'cronjob',
+  'daemonset',
+  'deployment',
+  'horizontalpodautoscaler',
+  'ingress',
+  'job',
+  'persistentvolumeclaim',
+  'pod',
+  'replicaset',
+  'secret',
+  'service',
+  'statefulset',
+])
+
+// Built-in kind names (PascalCase) -- resFilter only gates these.
+// CRD kinds pass through unless explicitly excluded.
+const BUILTIN_KINDS = new Set([
+  'Pod',
+  'Deployment',
+  'ReplicaSet',
+  'StatefulSet',
+  'DaemonSet',
+  'Job',
+  'CronJob',
+  'Service',
+  'Ingress',
+  'ConfigMap',
+  'Secret',
+  'PersistentVolumeClaim',
+  'HorizontalPodAutoscaler',
+  'Endpoints',
+  'EndpointSlice',
+  'Event',
+])
+
 /**
  * Used to add a resource to the graph
  * @param {Resource} res The k8s resource to add
  */
 export function addResource(res) {
-  // Endpoints & EndpointSlice are stored in the cache but not added to the graph
+  // Always cache first so label/owner filters can access all resources
+  store(res)
+
+  // Endpoints & EndpointSlice are cached but not added to the graph
   if (res.kind === 'Endpoints' || res.kind === 'EndpointSlice') {
-    store(res)
     return
   }
 
-  // Events are special, not added to the graph but cached for display in the events view
+  // Events are not added to the graph
   if (res.kind === 'Event') {
-    store(res)
     window.dispatchEvent(new CustomEvent('kubeEventAdded', { detail: res }))
     return
   }
 
-  // Hide resources that are not in the filter
-  if (getConfig().resFilter && !getConfig().resFilter.includes(res.kind)) {
-    if (getConfig().debug) console.warn(`🍇 Skipping resource of kind ${res.kind} as it is not in the filter`)
-    return
+  // In operator tree mode, the tree-view module controls what gets rendered -- skip kind filtering
+  if (!_operatorMode) {
+    const activeFilter = getActiveKindFilter()
+    if (activeFilter && activeFilter.length > 0 && !activeFilter.includes(res.kind)) {
+      if (_urlKindsOverride && _urlKindsOverride.length > 0) {
+        if (getConfig().debug) console.warn(`🍇 Skipping resource of kind ${res.kind} (URL kinds filter)`)
+        return
+      }
+
+      if (BUILTIN_KINDS.has(res.kind)) {
+        if (getConfig().debug) console.warn(`🍇 Skipping resource of kind ${res.kind} as it is not in the filter`)
+        return
+      }
+    }
   }
 
   if (shouldHideEmptyReplicaSet(res)) {
@@ -47,17 +95,48 @@ export function addResource(res) {
     graph.addNodeData([makeNode(res)])
     processLinks(res)
 
-    // Dispatch a custom event to notify that the node has been added
     const event = new CustomEvent('nodeAdded', { detail: res.metadata.uid })
     window.dispatchEvent(event)
 
-    store(res)
     return res.metadata.uid
   } catch (e) {
     if (getConfig().debug) {
       console.warn(`🍒 Unable to add node for resource ${res.metadata.name} (${res.kind}):`, e.message)
     }
   }
+}
+
+/** @type {string[] | null} */
+let _urlKindsOverride = null
+
+let _operatorMode = false
+
+/**
+ * Enable/disable operator view mode (affects node labeling).
+ * @param {boolean} enabled
+ */
+export function setOperatorMode(enabled) {
+  _operatorMode = enabled
+}
+
+/**
+ * Set the URL kinds override for filtering. When set, this takes priority over localStorage resFilter.
+ * @param {string[] | null} kinds
+ */
+export function setUrlKindsOverride(kinds) {
+  _urlKindsOverride = kinds
+}
+
+/**
+ * Get the active kind filter, considering URL override.
+ * @returns {string[] | null}
+ */
+export function getActiveKindFilter() {
+  if (_urlKindsOverride && _urlKindsOverride.length > 0) {
+    return _urlKindsOverride
+  }
+
+  return getConfig().resFilter || null
 }
 
 /**
@@ -329,6 +408,92 @@ export function processLinks(res) {
 }
 
 /**
+ * Generate a dynamic CRD icon SVG with shortname text baked in.
+ * @param {string} shortName - e.g. "DSC", "HP", "GC"
+ * @param {string} color - gradient base color: 'purple', 'green', 'red', 'grey'
+ * @returns {string} data URI
+ */
+function generateCrdIcon(shortName, color = 'purple') {
+  const colors = {
+    purple: { from: '#7B61FF', to: '#5A3FD9', stroke: '#9B8AFF' },
+    green: { from: '#2ECC71', to: '#27AE60', stroke: '#58D68D' },
+    red: { from: '#E74C3C', to: '#C0392B', stroke: '#F1948A' },
+    grey: { from: '#95A5A6', to: '#7F8C8D', stroke: '#BDC3C7' },
+  }
+
+  const c = colors[color] || colors.purple
+  const fontSize = shortName.length > 3 ? 12 : shortName.length > 2 ? 14 : 16
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" style="stop-color:${c.from};stop-opacity:1"/>
+<stop offset="100%" style="stop-color:${c.to};stop-opacity:1"/>
+</linearGradient></defs>
+<rect x="10" y="10" width="80" height="80" rx="12" ry="12" fill="url(#g)" stroke="${c.stroke}" stroke-width="2"/>
+<text x="50" y="42" text-anchor="middle" font-family="Arial,sans-serif" font-size="14" font-weight="bold" fill="#fff">CRD</text>
+<line x1="25" y1="52" x2="75" y2="52" stroke="#fff" stroke-width="1.5" stroke-opacity="0.5"/>
+<text x="50" y="72" text-anchor="middle" font-family="Arial,sans-serif" font-size="${fontSize}" font-weight="bold" fill="#fff" fill-opacity="0.9">${shortName}</text>
+</svg>`
+
+  return `data:image/svg+xml;base64,${btoa(svg)}`
+}
+
+/**
+ * Resolve the icon path for a resource, using the fallback chain:
+ * 1. Virtual CRD nodes get a dynamic icon with shortname
+ * 2. CSV nodes use the operator icon from spec.icon
+ * 3. customIcons config
+ * 4. Built-in icon
+ * 5. Generic CRD icon with shortname
+ * @param {Resource} res
+ * @param {string} colourSuffix
+ * @returns {string}
+ */
+function resolveIconPath(res, colourSuffix) {
+  const cfg = getConfig()
+  const kindLower = res.kind.toLowerCase()
+  const apiVersionKind = `${res.apiVersion || ''}/${res.kind}`
+
+  // Virtual CRD kind nodes: dynamic icon with shortname
+  if (res._virtual && res._shortName) {
+    const hasKids = res._hasChildren !== false
+    const color = hasKids ? 'purple' : 'grey'
+    return generateCrdIcon(res._shortName, color)
+  }
+
+  // CSV: use the operator icon from spec.icon if available
+  if (res.kind === 'ClusterServiceVersion' && res.spec?.icon?.[0]) {
+    const icon = res.spec.icon[0]
+    if (icon.base64data && icon.mediatype) {
+      return `data:${icon.mediatype};base64,${icon.base64data}`
+    }
+  }
+
+  if (cfg.customIcons) {
+    if (cfg.customIcons[apiVersionKind]) {
+      return `${ICON_PATH}/${cfg.customIcons[apiVersionKind]}`
+    }
+    if (cfg.customIcons[res.kind]) {
+      return `${ICON_PATH}/${cfg.customIcons[res.kind]}`
+    }
+  }
+
+  if (BUILTIN_ICON_KINDS.has(kindLower)) {
+    return `${ICON_PATH}/${kindLower}${colourSuffix}.svg`
+  }
+
+  // Non-built-in kinds: dynamic CRD icon with shortname
+  if (_operatorMode) {
+    const caps = res.kind.replace(/[a-z]/g, '')
+    const shortName = caps.length >= 2 ? caps : res.kind.substring(0, 3).toUpperCase()
+    const color = colourSuffix === '-green' ? 'green' : colourSuffix === '-red' ? 'red' : colourSuffix === '-grey' ? 'grey' : 'purple'
+    return generateCrdIcon(shortName, color)
+  }
+
+  return `${ICON_PATH}/crd-default${colourSuffix}.svg`
+}
+
+/**
  * Create a node object for G6 from the k8s resource
  * @param {Resource} res The k8s resource to create a node for
  * @returns {ResNode} The G6 node object to be added to the graph
@@ -336,12 +501,24 @@ export function processLinks(res) {
 function makeNode(res) {
   let label = res.metadata.name
 
-  // Shorten the name if configured to do so
   if (getConfig().shortenNames && res.metadata && res.metadata.labels) {
     if (res.metadata.labels['pod-template-hash']) {
       label = label.split('-' + res.metadata.labels['pod-template-hash'])[0]
     }
   }
+
+  // Shorten CSV names: "rhods-operator.3.4.2" -> "rhods-operator"
+  if (res.kind === 'ClusterServiceVersion') {
+    label = label.replace(/\.\d+\.\d+\.\d+.*$/, '')
+    label = label.replace(/\.v\d+.*$/, '')
+  }
+
+  // Virtual CRD kind nodes get their display name
+  if (res._virtual && res._displayName) {
+    label = res._displayName
+  }
+
+  // No text prefix needed -- shortnames are now baked into the CRD icons
 
   let colourSuffix = statusColour(res)
   if (colourSuffix !== '') {
@@ -351,11 +528,12 @@ function makeNode(res) {
   return {
     id: res.metadata.uid,
     style: {
-      src: `${ICON_PATH}/${res.kind.toLowerCase() + colourSuffix}.svg`,
+      src: resolveIconPath(res, colourSuffix),
       labelText: label,
     },
     data: {
       kind: res.kind,
+      namespace: res.metadata.namespace || '',
       ip: res.status?.podIP || res.status?.hostIP || null,
     },
   }
@@ -424,6 +602,25 @@ function statusColour(res) {
       if (succeeded >= completions) return 'green'
       if (failed >= backoffLimit) return 'red'
 
+      return 'grey'
+    }
+
+    // Generic fallback for CRDs and other unknown resource types:
+    // Check standard conditions (Ready, Available) that most operators follow
+    if (res.status?.conditions && Array.isArray(res.status.conditions)) {
+      const readyCond = res.status.conditions.find((c) => c.type === 'Ready' || c.type === 'Available')
+      if (readyCond) {
+        if (readyCond.status === 'True') return 'green'
+        if (readyCond.status === 'False') return 'red'
+      }
+
+      return 'grey'
+    }
+
+    if (res.status?.phase) {
+      const phase = res.status.phase.toLowerCase()
+      if (phase === 'running' || phase === 'active' || phase === 'bound' || phase === 'succeeded') return 'green'
+      if (phase === 'failed' || phase === 'error') return 'red'
       return 'grey'
     }
   } catch (e) {

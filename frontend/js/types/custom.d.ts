@@ -17,6 +17,7 @@ declare type Config = {
   resFilter: string[]
   spacing: number
   hideEmptyReplicaSets: boolean
+  customIcons?: Record<string, string>
 }
 
 // Represents a generic Kubernetes resource

@@ -17,6 +17,16 @@ disablePodLogs: false
 # -- Set to true to enable debug mode, which outputs much more information in the logs
 debug: false
 
+# -- List of CRD API groups to include for watching and displaying in the graph.
+# An empty list means all discoverable CRDs are included (unless excluded).
+# Example: ['monitoring.coreos.com', 'argoproj.io']
+crdApiGroups: []
+
+# -- List of CRD API groups to exclude from watching and displaying.
+# Takes precedence over crdApiGroups when both are set.
+# Example: ['cert-manager.io']
+crdExcludeGroups: []
+
 ingress:
   # -- Expose the app via an Ingress
   enabled: false

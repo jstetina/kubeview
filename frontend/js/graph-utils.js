@@ -1,5 +1,6 @@
 //@ts-check
 
+import { getResById, queryRes, findResByName } from './cache.js'
 import { getConfig } from './config.js'
 
 // ==========================================================================================
@@ -211,4 +212,145 @@ export async function fitToVisible(graph, animation = true) {
     // Fallback to standard fitView
     await graph.fitView({ when: 'always', direction: 'both' }, animation)
   }
+}
+
+/**
+ * Generalized visibility filter: shows/hides nodes based on a predicate function.
+ * The predicate receives (nodeData, cachedResource) and returns true if visible.
+ * @param {any} graph
+ * @param {function(any, Resource|null): boolean} predicate
+ * @returns {number} Count of visible nodes
+ */
+export function nodeVisByPredicate(graph, predicate) {
+  const allNodes = graph.getNodeData()
+  const updatedNodes = allNodes.map((node) => {
+    const cached = getResById(node.id)
+    const visible = predicate(node, cached)
+
+    return {
+      ...node,
+      style: {
+        ...node.style,
+        visibility: visible ? 'visible' : 'hidden',
+      },
+    }
+  })
+
+  graph.updateNodeData(updatedNodes)
+
+  const visibleNodeIds = new Set(updatedNodes.filter((n) => n.style.visibility === 'visible').map((n) => n.id))
+
+  const allEdges = graph.getEdgeData()
+  const updatedEdges = allEdges.map((edge) => {
+    const edgeVisible = visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
+
+    return {
+      ...edge,
+      style: {
+        ...edge.style,
+        visibility: edgeVisible ? 'visible' : 'hidden',
+      },
+    }
+  })
+
+  graph.updateEdgeData(updatedEdges)
+
+  return visibleNodeIds.size
+}
+
+/**
+ * Collect all UIDs reachable from a given owner via ownerReferences (BFS).
+ * Includes the owner itself and all transitive children.
+ * @param {string} ownerKind
+ * @param {string} ownerName
+ * @returns {Set<string>}
+ */
+export function collectOwnerTree(ownerKind, ownerName) {
+  const result = new Set()
+  const owner = findResByName(ownerKind, ownerName)
+
+  if (!owner) return result
+
+  const queue = [owner.metadata.uid]
+  result.add(owner.metadata.uid)
+
+  while (queue.length > 0) {
+    const parentUid = queue.shift()
+    const children = queryRes(
+      (r) => r.metadata.ownerReferences && r.metadata.ownerReferences.some((ref) => ref.uid === parentUid),
+    )
+
+    for (const child of children) {
+      if (!result.has(child.metadata.uid)) {
+        result.add(child.metadata.uid)
+        queue.push(child.metadata.uid)
+      }
+    }
+  }
+
+  return result
+}
+
+/**
+ * @typedef {Object} UrlFilters
+ * @property {string} [q] - text search query
+ * @property {string[]} [kinds] - kind filter list
+ * @property {string} [owner] - "Kind/Name" owner filter
+ * @property {string[]} [labels] - label selectors ["key=value", ...]
+ */
+
+/**
+ * Build a combined predicate from URL filter parameters.
+ * All active filters are ANDed together.
+ * @param {UrlFilters} filters
+ * @returns {function(any, Resource|null): boolean}
+ */
+export function buildFilterPredicate(filters) {
+  const predicates = []
+
+  if (filters.q) {
+    const q = filters.q.toLowerCase()
+    predicates.push((node, _cached) => {
+      const labelText = node.style?.labelText || ''
+      return labelText.toLowerCase().includes(q)
+    })
+  }
+
+  if (filters.kinds && filters.kinds.length > 0) {
+    const kindSet = new Set(filters.kinds)
+    predicates.push((node, _cached) => {
+      return kindSet.has(node.data?.kind)
+    })
+  }
+
+  if (filters.owner) {
+    const parts = filters.owner.split('/')
+    if (parts.length === 2) {
+      const ownerTree = collectOwnerTree(parts[0], parts[1])
+      if (ownerTree.size > 0) {
+        predicates.push((node, _cached) => ownerTree.has(node.id))
+      }
+    }
+  }
+
+  if (filters.labels && filters.labels.length > 0) {
+    const labelPairs = filters.labels.map((l) => {
+      const eqIdx = l.indexOf('=')
+      return eqIdx > 0 ? [l.substring(0, eqIdx), l.substring(eqIdx + 1)] : [l, '']
+    })
+
+    predicates.push((_node, cached) => {
+      if (!cached || !cached.metadata?.labels) return false
+      return labelPairs.every(([key, val]) => {
+        if (val === '') return key in cached.metadata.labels
+        return cached.metadata.labels[key] === val
+      })
+    })
+  }
+
+  if (predicates.length === 0) {
+    return () => true
+  }
+
+  return (node, cached) => predicates.every((p) => p(node, cached))
 }

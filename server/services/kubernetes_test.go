@@ -57,6 +57,23 @@ func mockKubernetes() *Kubernetes {
 		Mode:              "test",
 		UseEndpointSlices: false,
 		KubeVersion:       "v1.30.0",
+		watchedGVRs: []ResourceTypeInfo{
+			{Group: "", Version: "v1", Resource: "pods", Kind: "Pod"},
+			{Group: "", Version: "v1", Resource: "services", Kind: "Service"},
+			{Group: "", Version: "v1", Resource: "configmaps", Kind: "ConfigMap"},
+			{Group: "", Version: "v1", Resource: "secrets", Kind: "Secret"},
+			{Group: "", Version: "v1", Resource: "endpoints", Kind: "Endpoints"},
+			{Group: "", Version: "v1", Resource: "persistentvolumeclaims", Kind: "PersistentVolumeClaim"},
+			{Group: "", Version: "v1", Resource: "events", Kind: "Event"},
+			{Group: "apps", Version: "v1", Resource: "deployments", Kind: "Deployment"},
+			{Group: "apps", Version: "v1", Resource: "replicasets", Kind: "ReplicaSet"},
+			{Group: "apps", Version: "v1", Resource: "statefulsets", Kind: "StatefulSet"},
+			{Group: "apps", Version: "v1", Resource: "daemonsets", Kind: "DaemonSet"},
+			{Group: "batch", Version: "v1", Resource: "jobs", Kind: "Job"},
+			{Group: "batch", Version: "v1", Resource: "cronjobs", Kind: "CronJob"},
+			{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses", Kind: "Ingress"},
+			{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers", Kind: "HorizontalPodAutoscaler"},
+		},
 	}
 }
 

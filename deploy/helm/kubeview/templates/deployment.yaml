@@ -55,6 +55,14 @@ spec:
             - name: DISABLE_POD_LOGS
               value: "true"
           {{- end }}
+          {{- if .Values.crdApiGroups }}
+            - name: CRD_GROUPS
+              value: {{ .Values.crdApiGroups | join "," | quote }}
+          {{- end }}
+          {{- if .Values.crdExcludeGroups }}
+            - name: CRD_EXCLUDE_GROUPS
+              value: {{ .Values.crdExcludeGroups | join "," | quote }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8000

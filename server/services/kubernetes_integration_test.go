@@ -24,7 +24,7 @@ func TestNewKubernetes_Integration(t *testing.T) {
 	broker := sse.NewBroker[KubeEvent]()
 
 	// Test creating a new Kubernetes service
-	k, err := NewKubernetes(broker, "")
+	k, err := NewKubernetes(broker, "", CRDConfig{})
 	if err != nil {
 		t.Skipf("Skipping integration test - could not connect to Kubernetes: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestNewKubernetes_SingleNamespace_Integration(t *testing.T) {
 	broker := sse.NewBroker[KubeEvent]()
 
 	// Test creating a new Kubernetes service with single namespace
-	k, err := NewKubernetes(broker, "default")
+	k, err := NewKubernetes(broker, "default", CRDConfig{})
 	if err != nil {
 		t.Skipf("Skipping integration test - could not connect to Kubernetes: %v", err)
 	}

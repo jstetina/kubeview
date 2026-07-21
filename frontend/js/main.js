@@ -11,10 +11,27 @@ import { Graph, GraphEvent } from '../ext/g6-esm.js'
 
 import { getConfig, saveConfig } from './config.js'
 import { getClientId, initEventStreaming, togglePaused } from './events.js'
-import { addResource, processLinks, layout } from './graph.js'
-import { clearCache } from './cache.js'
+import { addResource, addEdge, processLinks, layout, setUrlKindsOverride, setOperatorMode } from './graph.js'
+import { clearCache, getResById } from './cache.js'
 import { showToast } from '../ext/toast.js'
-import { dagreLayout, fitToVisible, forceLayout, nodeVisByLabel } from './graph-utils.js'
+import {
+  dagreLayout,
+  fitToVisible,
+  forceLayout,
+  nodeVisByLabel,
+  nodeVisByPredicate,
+  buildFilterPredicate,
+} from './graph-utils.js'
+import {
+  buildTree,
+  getVisibleUids,
+  toggleExpand,
+  hasChildren,
+  getChildCount,
+  getChildren,
+  expandAll,
+  collapseAll,
+} from './tree-view.js'
 import sidePanel from './side-panel.js'
 import eventsDialog from './events-dialog.js'
 
@@ -122,6 +139,16 @@ Alpine.data('mainApp', () => ({
     clusterMode: '',
   },
 
+  /** @type {Array<{kind: string, group: string, version: string, resource: string}>} */
+  resourceTypes: [],
+
+  /** @type {{q?: string, kinds?: string[], owner?: string, labels?: string[]}} */
+  urlFilters: {},
+
+  operatorMode: false,
+  /** @type {any} */
+  operatorConfig: null,
+
   // ===== Functions ============================================
 
   /**
@@ -143,7 +170,11 @@ Alpine.data('mainApp', () => ({
       const newState = /** @type {CustomEvent} */ (event).detail.state
       if (this.connState === 'disconnected' && newState === 'connected') {
         showToast('Reconnected to the server!<br>Resuming live updates', 3000, 'top-center', 'success')
-        this.fetchNamespace()
+        if (this.operatorMode) {
+          this.fetchOperatorView()
+        } else {
+          this.fetchNamespace()
+        }
       }
 
       if (this.connState === 'connected' && newState === 'disconnected') {
@@ -173,25 +204,47 @@ Alpine.data('mainApp', () => ({
 
     // Listen for resource addition events, and re-run the search & filtering
     graph.on(GraphEvent.BEFORE_ELEMENT_CREATE, () => {
-      if (this.searchQuery) {
-        this.filterView(this.searchQuery)
+      if (this.searchQuery || this.hasActiveUrlFilters()) {
+        this.applyUrlFilters()
       }
     })
 
-    this.$watch('searchQuery', (query) => this.filterView(query))
+    this.$watch('searchQuery', (query) => {
+      this.urlFilters.q = query || undefined
+      this.syncUrlParams()
+      this.applyUrlFilters()
+    })
 
     this.$watch('namespace', () => {
       console.log(`🔄 Namespace changed to: ${this.namespace}`)
 
       this.fetchNamespace()
 
-      // This is a workaround to notify other tabs about the namespace change
       channel.postMessage({ type: 'namespaceChange', namespace: this.namespace })
     })
 
-    // Check if the URL has a namespace parameter
+    // Double-click handler for expand/collapse in operator mode
+    graph.on('node:dblclick', (evt) => {
+      const nodeId = evt.target?.id
+      if (this.operatorMode && nodeId) {
+        console.log('Double-click on node:', nodeId)
+        this.handleNodeExpand(nodeId)
+      }
+    })
+
+    // Parse all URL parameters
     const urlParams = new URLSearchParams(window.location.search)
     const queryNs = urlParams.get('ns') || ''
+    this.urlFilters = this.parseUrlFilters(urlParams)
+
+    if (this.urlFilters.q) {
+      this.searchQuery = this.urlFilters.q
+    }
+
+    if (this.urlFilters.kinds) {
+      setUrlKindsOverride(this.urlFilters.kinds)
+    }
+
     if (queryNs) {
       this.showWelcome = false
       this.namespace = queryNs
@@ -200,10 +253,31 @@ Alpine.data('mainApp', () => ({
     // Load the initial namespaces
     await this.refreshNamespaces()
 
+    // Check for operator config -- if present and URL has ?view=operator or no ?ns=, switch to operator mode
+    try {
+      const opRes = await fetch('api/operator-config')
+      if (opRes.ok) {
+        const opData = await opRes.json()
+        if (opData && opData.name) {
+          this.operatorConfig = opData
+          console.log(`📋 Operator config loaded: ${opData.name}`)
+
+          const viewParam = urlParams.get('view')
+          if (viewParam === 'operator' || !queryNs) {
+            this.operatorMode = true
+            this.showWelcome = false
+            this.fetchOperatorView()
+          }
+        }
+      }
+    } catch (_err) {
+      console.log('No operator config available')
+    }
+
     // Handle post render event to show a toast if no nodes are present
     graph.on(GraphEvent.AFTER_RENDER, () => {
       if (graph.getNodeData().length === 0) {
-        showToast('No resources found in this namespace<br>Check your filter settings', 3000, 'top-center', 'warning')
+        showToast('No resources found<br>Check your filter settings', 3000, 'top-center', 'warning')
       }
     })
   },
@@ -234,6 +308,16 @@ Alpine.data('mainApp', () => ({
     }
 
     console.log(`📚 Found ${this.namespaces ? this.namespaces.length : 0} namespaces in cluster`)
+
+    try {
+      const rtRes = await fetch('api/resource-types')
+      if (rtRes.ok) {
+        this.resourceTypes = await rtRes.json()
+        console.log(`📋 Discovered ${this.resourceTypes.length} resource types`)
+      }
+    } catch (_err) {
+      console.warn('Failed to fetch resource types')
+    }
   },
 
   /**
@@ -242,7 +326,9 @@ Alpine.data('mainApp', () => ({
    */
   async refreshAll() {
     await this.refreshNamespaces()
-    if (this.namespace) {
+    if (this.operatorMode) {
+      await this.fetchOperatorView()
+    } else if (this.namespace) {
       await this.fetchNamespace()
     }
   },
@@ -280,9 +366,13 @@ Alpine.data('mainApp', () => ({
     }
 
     this.isLoading = true
-    this.searchQuery = ''
 
-    window.history.replaceState({}, '', `?ns=${this.namespace}`)
+    // Only clear search if it did not come from URL
+    if (!this.urlFilters.q) {
+      this.searchQuery = ''
+    }
+
+    this.syncUrlParams()
     await graph.clear()
 
     window.dispatchEvent(new CustomEvent('closePanel'))
@@ -305,10 +395,8 @@ Alpine.data('mainApp', () => ({
       console.log('📦 Fetched data:', data)
     }
 
-    // Important: Clear the cache before adding new resources
     clearCache()
 
-    // Pass 1 - Add ALL the resources to the graph
     for (const kindKey in data) {
       const resources = data[kindKey]
       for (const res of resources || []) {
@@ -316,7 +404,6 @@ Alpine.data('mainApp', () => ({
       }
     }
 
-    // Pass 2 - Add links between using metadata.ownerReferences
     for (const kindKey in data) {
       const resources = data[kindKey]
       for (const res of resources || []) {
@@ -326,6 +413,11 @@ Alpine.data('mainApp', () => ({
 
     try {
       await graph.render()
+
+      if (this.hasActiveUrlFilters()) {
+        this.applyUrlFilters()
+      }
+
       await fitToVisible(graph, true)
     } catch (e) {
       console.error('💥 Error rendering graph:', e)
@@ -333,27 +425,435 @@ Alpine.data('mainApp', () => ({
     }
   },
 
+  /** @type {Array<{sourceUid: string, targetUid: string}>} */
+  _operatorExtraEdges: [],
+
   /**
-   * Search for resources in the graph based on a query string
-   * Filters nodes by their labelText property, hiding non-matching nodes
+   * Fetch the operator-centric cross-namespace view.
+   * Tries GraphQL endpoint first (fast, cached), falls back to direct K8s API.
+   * Loads all data into cache, builds the tree, then renders only root nodes.
+   */
+  async fetchOperatorView() {
+    this.errorMessage = ''
+
+    if (this.isLoading) {
+      console.warn('⚠️ Fetch already in progress, ignoring new request')
+      return
+    }
+
+    this.isLoading = true
+    this.operatorMode = true
+    setOperatorMode(true)
+
+    if (!this.urlFilters.q) {
+      this.searchQuery = ''
+    }
+
+    window.history.replaceState({}, '', '?view=operator')
+    await graph.clear()
+
+    window.dispatchEvent(new CustomEvent('closePanel'))
+
+    let result
+    let dataSource = 'k8s-api'
+
+    // Try GraphQL endpoint first (ocp-resource-monitor)
+    try {
+      const gqlResult = await this.fetchFromGraphQL()
+      if (gqlResult) {
+        result = gqlResult
+        dataSource = 'graphql'
+      }
+    } catch (_err) {
+      if (this.cfg.debug) console.log('GraphQL not available, falling back to direct K8s API')
+    }
+
+    // Fall back to direct K8s API
+    if (!result) {
+      let res
+      try {
+        res = await fetch(`api/operator-view?clientID=${getClientId()}`)
+        if (!res.ok) throw new Error(`HTTP error ${res.status}: ${res.statusText}`)
+        result = await res.json()
+      } catch (err) {
+        this.showError(`Failed to fetch operator view: ${err.message}`, res)
+        return
+      }
+    }
+
+    this.isLoading = false
+    this.showWelcome = false
+
+    if (this.cfg.debug) {
+      console.log(`📦 Operator view data (source: ${dataSource}):`, result)
+    }
+
+    clearCache()
+
+    const data = result.resources || {}
+    this._operatorExtraEdges = result.extraEdges || result.edges || []
+
+    const { store } = await import('./cache.js')
+
+    for (const kindKey in data) {
+      for (const r of data[kindKey] || []) {
+        store(r)
+      }
+    }
+
+    // If GraphQL returned flat resource list instead of grouped
+    if (Array.isArray(result.resources)) {
+      for (const r of result.resources) {
+        const resObj = r.json || r.resource_json || r
+        if (resObj.kind && resObj.metadata) {
+          store(resObj)
+        }
+      }
+    }
+
+    buildTree(this._operatorExtraEdges)
+    await this.renderTreeView()
+
+  },
+
+  /**
+   * Attempt to fetch operator view from the GraphQL endpoint (ocp-resource-monitor)
+   * @returns {Promise<any|null>} The result or null if GraphQL is not available
+   */
+  async fetchFromGraphQL() {
+    // First, discover the cluster ID
+    const clusterRes = await fetch('api/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: '{ clusters { id name } }' }),
+    })
+
+    if (!clusterRes.ok) return null
+
+    const clusterData = await clusterRes.json()
+    const clusters = clusterData?.data?.clusters
+    if (!clusters || clusters.length === 0) return null
+
+    const clusterId = clusters[0].id
+    console.log(`📡 Using GraphQL cluster: ${clusters[0].name} (${clusterId})`)
+
+    const query = `
+      query OperatorView($clusterId: ID!) {
+        operatorView(clusterId: $clusterId) {
+          resources {
+            uid
+            namespace
+            apiVersion
+            kind
+            name
+            json
+            labels
+            statusPhase
+            statusReady
+          }
+          edges {
+            sourceUid
+            targetUid
+            edgeType
+          }
+        }
+      }
+    `
+
+    const res = await fetch('api/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables: { clusterId } }),
+    })
+
+    if (!res.ok) return null
+
+    const gqlResponse = await res.json()
+    if (gqlResponse.errors || !gqlResponse.data?.operatorView) return null
+
+    const view = gqlResponse.data.operatorView
+
+    // Deduplicate CSVs: keep only one per CSV name (prefer the operator namespace)
+    const seenCSVs = new Map()
+    const resources = {}
+
+    for (const r of view.resources || []) {
+      const resObj = typeof r.json === 'string' ? JSON.parse(r.json) : r.json
+
+      if (r.kind === 'ClusterServiceVersion') {
+        const baseName = r.name
+        if (seenCSVs.has(baseName)) continue
+        seenCSVs.set(baseName, r.uid)
+      }
+
+      const kindKey = r.kind.toLowerCase() + 's'
+      if (!resources[kindKey]) resources[kindKey] = []
+      resources[kindKey].push(resObj)
+    }
+
+    // All edges from the DB (owner, ref, synthetic)
+    const extraEdges = (view.edges || []).map((e) => ({
+      sourceUid: e.sourceUid,
+      targetUid: e.targetUid,
+    }))
+
+    return { resources, extraEdges }
+  },
+
+  /**
+   * Re-render the graph showing only currently visible nodes (based on expand/collapse state)
+   * @param {string[]|null} [focusNodeIds] - if provided, zoom to these nodes instead of fitToVisible
+   */
+  async renderTreeView(focusNodeIds = null) {
+    await graph.clear()
+
+    const visibleUids = getVisibleUids()
+
+    for (const uid of visibleUids) {
+      const res = getResById(uid)
+      if (res) {
+        addResource(res)
+      }
+    }
+
+    for (const uid of visibleUids) {
+      const children = getChildren(uid)
+      for (const childUid of children) {
+        if (visibleUids.has(childUid)) {
+          addEdge(uid, childUid)
+        }
+      }
+    }
+
+    try {
+      graph.setLayout(dagreLayout)
+      await graph.render()
+
+      if (this.hasActiveUrlFilters()) {
+        this.applyUrlFilters()
+      }
+
+      await graph.layout()
+
+      if (focusNodeIds && focusNodeIds.length > 0) {
+        await this.focusOnNodes(focusNodeIds)
+      } else {
+        await fitToVisible(graph, true)
+      }
+    } catch (e) {
+      console.error('💥 Error rendering graph:', e)
+    }
+  },
+
+  /**
+   * Handle double-click on a node in operator mode to expand/collapse
+   * @param {string} nodeId
+   */
+  async handleNodeExpand(nodeId) {
+    if (!this.operatorMode) return
+    if (!hasChildren(nodeId)) {
+      return
+    }
+
+    const { isExpanded } = await import('./tree-view.js')
+    const wasExpanded = isExpanded(nodeId)
+    toggleExpand(nodeId)
+
+    // Pass focus targets so renderTreeView skips fitToVisible and focuses on children instead
+    const focusTargets = !wasExpanded ? [nodeId, ...getChildren(nodeId)] : null
+    await this.renderTreeView(focusTargets)
+  },
+
+  /**
+   * Zoom and center the view on a set of node IDs
+   * @param {string[]} nodeIds
+   */
+  async focusOnNodes(nodeIds) {
+    try {
+      const positions = []
+      for (const id of nodeIds) {
+        try {
+          const pos = graph.getElementPosition(id)
+          if (pos) positions.push(pos)
+        } catch (_e) { /* node might not exist */ }
+      }
+
+      if (positions.length === 0) return
+
+      const minX = Math.min(...positions.map((p) => p[0]))
+      const maxX = Math.max(...positions.map((p) => p[0]))
+      const minY = Math.min(...positions.map((p) => p[1]))
+      const maxY = Math.max(...positions.map((p) => p[1]))
+
+      const centerX = (minX + maxX) / 2
+      const centerY = (minY + maxY) / 2
+      const width = maxX - minX
+      const height = maxY - minY
+
+      const canvasSize = graph.getSize()
+      const paddingX = canvasSize[0] * 0.15
+      const paddingY = canvasSize[1] * 0.15
+
+      const zoomX = (canvasSize[0] - 2 * paddingX) / Math.max(width, 100)
+      const zoomY = (canvasSize[1] - 2 * paddingY) / Math.max(height, 100)
+      const targetZoom = Math.min(zoomX, zoomY, 2)
+
+      const currentZoom = graph.getZoom()
+      const zoomRatio = (targetZoom / currentZoom) * 0.9
+
+      const viewportCenter = graph.getViewportCenter()
+
+      if (Math.abs(zoomRatio - 1) > 0.05) {
+        await graph.zoomBy(zoomRatio, true, viewportCenter)
+      }
+
+      const targetPoint = [centerX, centerY]
+      const currentViewport = graph.getViewportByCanvas(targetPoint)
+      const translateX = canvasSize[0] / 2 - currentViewport[0]
+      const translateY = canvasSize[1] / 2 - currentViewport[1]
+
+      if (Math.abs(translateX) > 5 || Math.abs(translateY) > 5) {
+        await graph.translateBy([translateX, translateY], true)
+      }
+    } catch (_e) {
+      // Fallback: just fit the whole view
+      await fitToVisible(graph, true)
+    }
+  },
+
+  /**
+   * Expand all nodes in the tree
+   */
+  async handleExpandAll() {
+    expandAll()
+    await this.renderTreeView()
+    showToast('All nodes expanded', 1500, 'top-center', 'info')
+  },
+
+  /**
+   * Collapse to root nodes only
+   */
+  async handleCollapseAll() {
+    collapseAll()
+    await this.renderTreeView()
+    showToast('Collapsed to top level', 1500, 'top-center', 'info')
+  },
+
+  /**
+   * Search for resources in the graph based on a query string.
+   * If URL filters are active, applies the combined predicate instead of simple label search.
    * @param {string} query The search term to filter nodes by
    */
   async filterView(query) {
     query = query.trim().toLowerCase()
+    this.urlFilters.q = query || undefined
 
-    // Filters the graph nodes and edges based on the provided label query
+    if (this.hasActiveUrlFilters()) {
+      this.applyUrlFilters()
+      return
+    }
+
     const visCount = nodeVisByLabel(graph, query)
 
-    // Re-layout the graph to organize visible nodes
     await layout()
 
-    // Show toast with filter results
     if (visCount === 0 && graph.getNodeData().length > 0) {
       showToast(`No nodes found matching "${query}"`, 2000, 'top-center', 'warning')
     } else if (query === '') {
       showToast('Filter cleared, showing all nodes and edges', 2000, 'top-center', 'info')
     } else {
       showToast(`Found ${visCount} node(s) matching "${query}"`, 2000, 'top-center', 'info')
+    }
+  },
+
+  /**
+   * Parse URL filter parameters from search params
+   * @param {URLSearchParams} params
+   * @returns {{q?: string, kinds?: string[], owner?: string, labels?: string[]}}
+   */
+  parseUrlFilters(params) {
+    /** @type {{q?: string, kinds?: string[], owner?: string, labels?: string[]}} */
+    const filters = {}
+
+    const q = params.get('q')
+    if (q) filters.q = q
+
+    const kinds = params.get('kinds')
+    if (kinds) filters.kinds = kinds.split(',').filter(Boolean)
+
+    const owner = params.get('owner')
+    if (owner) filters.owner = owner
+
+    const labelParams = params.getAll('label')
+    if (labelParams.length > 0) filters.labels = labelParams
+
+    return filters
+  },
+
+  /**
+   * Check if any URL filters beyond namespace are active
+   * @returns {boolean}
+   */
+  hasActiveUrlFilters() {
+    return !!(
+      this.urlFilters.q ||
+      (this.urlFilters.kinds && this.urlFilters.kinds.length > 0) ||
+      this.urlFilters.owner ||
+      (this.urlFilters.labels && this.urlFilters.labels.length > 0)
+    )
+  },
+
+  /**
+   * Sync current filter state to the URL
+   */
+  syncUrlParams() {
+    const params = new URLSearchParams()
+
+    if (this.namespace) params.set('ns', this.namespace)
+    if (this.urlFilters.q) params.set('q', this.urlFilters.q)
+    if (this.urlFilters.kinds && this.urlFilters.kinds.length > 0) params.set('kinds', this.urlFilters.kinds.join(','))
+    if (this.urlFilters.owner) params.set('owner', this.urlFilters.owner)
+    if (this.urlFilters.labels) {
+      for (const label of this.urlFilters.labels) {
+        params.append('label', label)
+      }
+    }
+
+    window.history.replaceState({}, '', `?${params.toString()}`)
+  },
+
+  /**
+   * Apply all active URL filters as a combined visibility predicate
+   */
+  async applyUrlFilters() {
+    const predicate = buildFilterPredicate(this.urlFilters)
+    const visCount = nodeVisByPredicate(graph, predicate)
+
+    await layout()
+
+    const totalFilters = [this.urlFilters.q, this.urlFilters.kinds, this.urlFilters.owner, this.urlFilters.labels].filter(
+      Boolean,
+    ).length
+
+    if (visCount === 0 && graph.getNodeData().length > 0) {
+      showToast('No nodes match the active filters', 2000, 'top-center', 'warning')
+    } else if (totalFilters > 0) {
+      showToast(`Showing ${visCount} node(s) matching ${totalFilters} filter(s)`, 2000, 'top-center', 'info')
+    }
+  },
+
+  /**
+   * Generate a shareable URL with current filters and copy to clipboard
+   */
+  async copyShareableLink() {
+    this.syncUrlParams()
+    const url = window.location.href
+
+    try {
+      await navigator.clipboard.writeText(url)
+      showToast('Shareable link copied to clipboard', 2000, 'top-center', 'success')
+    } catch (_err) {
+      showToast('Failed to copy link', 2000, 'top-center', 'error')
     }
   },
 

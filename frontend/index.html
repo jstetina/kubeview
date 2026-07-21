@@ -25,23 +25,31 @@
       </div>
       <div class="navbar-start">
         <div class="navbar-item is-hidden-touch">
-          <!-- Main namespace selector -->
-          <div class="select">
-            <template x-if="namespaces !== null">
-              <select x-model="namespace" :disabled="isLoading || namespaces.length === 1">
-                <option value="" disabled>Choose a namespace</option>
-                <template x-for="ns in namespaces" :key="ns">
-                  <option :value="ns" x-text="ns" :selected="ns == namespace"></option>
-                </template>
-              </select>
-            </template>
-            <template x-if="namespaces === null">
-              <select>
-                <option value="" disabled selected>🔁 Loading...</option>
-              </select>
-            </template>
-          </div>
-          <button class="button is-info" type="button" @click="refreshAll()" :disabled="isLoading" title="Refresh Namespaces">
+          <!-- Operator mode indicator -->
+          <template x-if="operatorMode && operatorConfig">
+            <span class="tag is-info is-medium mr-2" x-text="operatorConfig.name">Operator View</span>
+          </template>
+
+          <!-- Main namespace selector (hidden in operator mode) -->
+          <template x-if="!operatorMode">
+            <div class="select">
+              <template x-if="namespaces !== null">
+                <select x-model="namespace" :disabled="isLoading || namespaces.length === 1">
+                  <option value="" disabled>Choose a namespace</option>
+                  <template x-for="ns in namespaces" :key="ns">
+                    <option :value="ns" x-text="ns" :selected="ns == namespace"></option>
+                  </template>
+                </select>
+              </template>
+              <template x-if="namespaces === null">
+                <select>
+                  <option value="" disabled selected>Loading...</option>
+                </select>
+              </template>
+            </div>
+          </template>
+
+          <button class="button is-info" type="button" @click="refreshAll()" :disabled="isLoading" title="Refresh">
             <span class="icon"><i class="fas fa-rotate"></i></span>
           </button>
 
@@ -69,6 +77,19 @@
             <button class="button is-primary" @click="toolbarSavePNG()" title="Save View as PNG" :disabled="isLoading || showWelcome">
               <span class="icon"><i class="fas fa-camera"></i></span>
             </button>
+            <button class="button is-primary" @click="copyShareableLink()" title="Copy shareable link with current filters" :disabled="isLoading || showWelcome">
+              <span class="icon"><i class="fas fa-share-nodes"></i></span>
+            </button>
+            <template x-if="operatorMode">
+              <button class="button is-info" @click="handleExpandAll()" title="Expand all nodes" :disabled="isLoading">
+                <span class="icon"><i class="fas fa-angles-down"></i></span>
+              </button>
+            </template>
+            <template x-if="operatorMode">
+              <button class="button is-info" @click="handleCollapseAll()" title="Collapse to top level" :disabled="isLoading">
+                <span class="icon"><i class="fas fa-angles-up"></i></span>
+              </button>
+            </template>
           </div>
         </div>
 
@@ -111,7 +132,7 @@
       <button class="button is-outline" @click="window.location.reload()">Reload</button>
     </div>
 
-    <div class="notification is-light mx-5 mt-5" id="welcome" x-show="showWelcome" x-cloak>
+    <div class="notification is-light mx-5 mt-5" id="welcome" x-show="showWelcome && !operatorMode" x-cloak>
       <div class="mb-4 has-background-light p-2 rounded">
         <img src="public/img/icon.png" class="logo" /><span class="logotext">Welcome to KubeView</span>
       </div>

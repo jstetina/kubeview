@@ -14,9 +14,10 @@ import (
 // This is the core struct for the server & API
 type KubeviewAPI struct {
 	*api.Base
-	kubeService *services.Kubernetes
-	eventBroker KubeEventBroker
-	config      Config
+	kubeService    *services.Kubernetes
+	eventBroker    KubeEventBroker
+	config         Config
+	operatorConfig *OperatorConfig
 }
 
 type NamespaceListResult struct {
@@ -33,17 +34,23 @@ type NamespaceListResult struct {
 func NewKubeviewAPI(conf Config) *KubeviewAPI {
 	broker := newKubeEventBroker(conf)
 
-	// Create a new Kubernetes service instance, which will connect to the cluster
-	kubeSvc, err := services.NewKubernetes(broker.Broker, conf.SingleNamespace)
+	crdConf := services.CRDConfig{
+		IncludeGroups: conf.CRDIncludeGroups,
+		ExcludeGroups: conf.CRDExcludeGroups,
+	}
+
+	kubeSvc, err := services.NewKubernetes(broker.Broker, conf.SingleNamespace, crdConf)
 	if err != nil {
 		log.Fatalf("💥 Error connecting to Kubernetes, system will exit")
 	}
 
-	// Our API struct is a wrapper around the base API functionality
+	opConfig := loadOperatorConfig(conf.OperatorConfigPath)
+
 	return &KubeviewAPI{
-		api.NewBase("kubeview", version, buildInfo, true),
-		kubeSvc,
-		broker,
-		conf,
+		Base:           api.NewBase("kubeview", version, buildInfo, true),
+		kubeService:    kubeSvc,
+		eventBroker:    broker,
+		config:         conf,
+		operatorConfig: opConfig,
 	}
 }
