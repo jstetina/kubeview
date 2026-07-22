@@ -31,6 +31,7 @@ import {
   getChildren,
   expandAll,
   collapseAll,
+  expandPathsToMatching,
 } from './tree-view.js'
 import sidePanel from './side-panel.js'
 import eventsDialog from './events-dialog.js'
@@ -53,8 +54,11 @@ export const graph = new Graph({
     style: {
       size: 100,
       labelFill: '#cccccc',
-      labelFontSize: 20,
+      labelFontSize: 18,
       labelPlacement: 'bottom',
+      labelWordWrap: true,
+      labelWordWrapWidth: 160,
+      labelMaxLines: 3,
       stroke: '#fff',
       lineWidth: 2,
       fillOpacity: 0.5,
@@ -209,10 +213,22 @@ Alpine.data('mainApp', () => ({
       }
     })
 
-    this.$watch('searchQuery', (query) => {
+    this.$watch('searchQuery', async (query) => {
+      // Don't react to initial URL-driven search before data is loaded
+      if (this.isLoading) return
+
       this.urlFilters.q = query || undefined
       this.syncUrlParams()
-      this.applyUrlFilters()
+
+      if (this.operatorMode && query && query.trim().length >= 2) {
+        await this.searchAndExpandPaths(query.trim())
+      } else if (this.operatorMode && !query) {
+        this._highlightedNodes = new Set()
+        collapseAll()
+        await this.renderTreeView()
+      } else {
+        this.applyUrlFilters()
+      }
     })
 
     this.$watch('namespace', () => {
@@ -266,7 +282,12 @@ Alpine.data('mainApp', () => ({
           if (viewParam === 'operator' || !queryNs) {
             this.operatorMode = true
             this.showWelcome = false
-            this.fetchOperatorView()
+            await this.fetchOperatorView()
+
+            // Apply URL search/filters AFTER data is loaded
+            if (this.urlFilters.q) {
+              await this.searchAndExpandPaths(this.urlFilters.q)
+            }
           }
         }
       }
@@ -600,6 +621,9 @@ Alpine.data('mainApp', () => ({
     return { resources, extraEdges }
   },
 
+  /** @type {Set<string>} UIDs of nodes that matched the current search/filter */
+  _highlightedNodes: new Set(),
+
   /**
    * Re-render the graph showing only currently visible nodes (based on expand/collapse state)
    * @param {string[]|null} [focusNodeIds] - if provided, zoom to these nodes instead of fitToVisible
@@ -629,8 +653,25 @@ Alpine.data('mainApp', () => ({
       graph.setLayout(dagreLayout)
       await graph.render()
 
-      if (this.hasActiveUrlFilters()) {
-        this.applyUrlFilters()
+      // Highlight matched/filtered nodes with a bright outline
+      if (this._highlightedNodes.size > 0) {
+        const allNodes = graph.getNodeData()
+        const updates = allNodes
+          .filter((n) => this._highlightedNodes.has(n.id))
+          .map((n) => ({
+            ...n,
+            style: {
+              ...n.style,
+              stroke: '#FFD700',
+              lineWidth: 4,
+              shadowColor: '#FFD700',
+              shadowBlur: 12,
+            },
+          }))
+
+        if (updates.length > 0) {
+          graph.updateNodeData(updates)
+        }
       }
 
       await graph.layout()
@@ -643,6 +684,35 @@ Alpine.data('mainApp', () => ({
     } catch (e) {
       console.error('💥 Error rendering graph:', e)
     }
+  },
+
+  /**
+   * Search all cached resources and expand tree paths to matching nodes.
+   * @param {string} query
+   */
+  async searchAndExpandPaths(query) {
+    const q = query.toLowerCase()
+    collapseAll()
+    this._highlightedNodes = new Set()
+
+    const matched = expandPathsToMatching((res) => {
+      const name = (res.metadata?.name || '').toLowerCase()
+      const kind = (res.kind || '').toLowerCase()
+      return name.includes(q) || kind.includes(q)
+    })
+
+    if (matched.length === 0) {
+      showToast(`No resources matching "${query}"`, 2000, 'top-center', 'warning')
+      await this.renderTreeView()
+      return
+    }
+
+    showToast(`Found ${matched.length} matching resource(s)`, 2000, 'top-center', 'info')
+
+    // Set highlighted nodes for visual distinction
+    this._highlightedNodes = new Set(matched)
+
+    await this.renderTreeView(matched)
   },
 
   /**
@@ -809,6 +879,7 @@ Alpine.data('mainApp', () => ({
   syncUrlParams() {
     const params = new URLSearchParams()
 
+    if (this.operatorMode) params.set('view', 'operator')
     if (this.namespace) params.set('ns', this.namespace)
     if (this.urlFilters.q) params.set('q', this.urlFilters.q)
     if (this.urlFilters.kinds && this.urlFilters.kinds.length > 0) params.set('kinds', this.urlFilters.kinds.join(','))

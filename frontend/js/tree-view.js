@@ -132,13 +132,14 @@ export function buildTree(edges = []) {
       if (!kind || seenKinds.has(kind)) continue
       seenKinds.add(kind)
 
-      // Skip CRDs marked as internal
-      if (internalObjects.has(crdFullName)) continue
-
+      const isInternal = internalObjects.has(crdFullName)
       const instances = resourcesByKind.get(kind) || []
+
       if (instances.length > 0) {
+        // Always show CRDs that have instances (even internal ones) to complete the ownership chain
         activeCrds.push({ kind, displayName, crdName: crdFullName, instances })
-      } else {
+      } else if (!isInternal) {
+        // Only show inactive CRDs if they're public (Provided APIs)
         inactiveCrds.push({ kind, displayName, crdName: crdFullName })
       }
     }
@@ -226,6 +227,71 @@ export function buildTree(edges = []) {
     const uid = res.metadata.uid
     if ((ROOT_KINDS.has(res.kind) || ENTRYPOINT_KINDS.has(res.kind)) && !parentMap.has(uid)) {
       rootNodes.add(uid)
+    }
+  }
+
+  // Step 5: orphaned resources (cached but no parent in tree, not a root, not built-in noise)
+  // Group them by kind under virtual CRD-kind nodes attached to a catch-all "Discovered CRDs" root
+  const SKIP_ORPHAN_KINDS = new Set([
+    'ClusterServiceVersion', 'DataScienceCluster', 'DSCInitialization',
+    'ConfigMap', 'Secret', 'Service', 'Endpoints', 'Event',
+    'CustomResourceDefinition',
+  ])
+
+  const orphansByKind = new Map()
+  for (const res of allResources) {
+    const uid = res.metadata.uid
+    if (parentMap.has(uid) || rootNodes.has(uid)) continue
+    if (SKIP_ORPHAN_KINDS.has(res.kind)) continue
+    if (res._virtual) continue
+
+    const list = orphansByKind.get(res.kind) || []
+    list.push(res)
+    orphansByKind.set(res.kind, list)
+  }
+
+  if (orphansByKind.size > 0) {
+    // Find the primary CSV to attach these to, or create a standalone root
+    const primaryCSV = csvs.length > 0 ? csvs[0] : null
+    const parentUid = primaryCSV ? primaryCSV.metadata.uid : null
+
+    for (const [kind, instances] of orphansByKind) {
+      const shortName = kindShortName(kind)
+      const anchorUid = parentUid || `orphan-root`
+
+      if (!parentUid) {
+        // Create a root node for orphans if no CSV exists
+        if (!rootNodes.has('orphan-root')) {
+          const rootRes = {
+            kind: 'CustomResourceDefinition', apiVersion: 'v1',
+            metadata: { uid: 'orphan-root', name: 'Discovered CRDs', namespace: '', labels: {}, annotations: {}, ownerReferences: [] },
+            spec: {}, status: {}, _virtual: true, _displayName: 'Discovered CRDs',
+          }
+          virtualNodeData.set('orphan-root', rootRes)
+          virtualNodes.add('orphan-root')
+          store(rootRes)
+          allUids.add('orphan-root')
+          rootNodes.add('orphan-root')
+        }
+      }
+
+      const virtualUid = `crd-kind:orphan:${kind}`
+      const virtualRes = {
+        kind: 'CustomResourceDefinition', apiVersion: 'apiextensions.k8s.io/v1',
+        metadata: { uid: virtualUid, name: kind, namespace: '', labels: {}, annotations: {}, ownerReferences: [] },
+        spec: { _crdKind: kind }, status: {},
+        _virtual: true, _shortName: shortName, _hasChildren: true,
+        _displayName: kind,
+      }
+      virtualNodeData.set(virtualUid, virtualRes)
+      virtualNodes.add(virtualUid)
+      store(virtualRes)
+      allUids.add(virtualUid)
+      addEdge(anchorUid, virtualUid)
+
+      for (const inst of instances) {
+        addEdge(virtualUid, inst.metadata.uid)
+      }
     }
   }
 }
@@ -344,6 +410,38 @@ export function expandAll() {
 
 export function collapseAll() {
   expandedNodes.clear()
+}
+
+/**
+ * Expand the full path from root to a target node (and all its ancestors).
+ * @param {string} targetUid
+ */
+export function expandPathTo(targetUid) {
+  let current = parentMap.get(targetUid)
+  while (current) {
+    expandedNodes.add(current)
+    current = parentMap.get(current)
+  }
+}
+
+/**
+ * Expand paths to all matching nodes (by predicate on cached resources).
+ * Returns the UIDs that matched.
+ * @param {function(any): boolean} predicate
+ * @returns {string[]}
+ */
+export function expandPathsToMatching(predicate) {
+  const allResources = queryRes(() => true)
+  const matched = []
+
+  for (const res of allResources) {
+    if (predicate(res)) {
+      matched.push(res.metadata.uid)
+      expandPathTo(res.metadata.uid)
+    }
+  }
+
+  return matched
 }
 
 export function getRootNodes() {

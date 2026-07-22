@@ -15,6 +15,10 @@
         <span class="icon"><i class="fas fa-rectangle-list"></i></span>
         <span>Pod Logs</span>
       </button>
+      <button class="button is-small is-info" @click="showYaml=!showYaml">
+        <span class="icon"><i class="fas fa-code"></i></span>
+        <span x-text="showYaml ? 'Hide YAML' : 'Show YAML'">Show YAML</span>
+      </button>
     </div>
     <!-- Labels & Annotations -->
     <template x-for="(value, label) in panelData.labels" :key="label">
@@ -59,5 +63,17 @@
         </template>
       </div>
     </template>
+    <!-- Full resource YAML/JSON -->
+    <div x-show="showYaml" x-transition>
+      <div
+        class="panel-block has-background-dark py-0 is-flex is-justify-content-space-around is-align-items-center clickable"
+        @click="showYaml=!showYaml">
+        <label class="label is-flex-grow-1 pt-1 mr-3 clickable">Resource JSON</label>
+        <i class="fas fa-angles-up"></i>
+      </div>
+      <div class="panel-block" style="max-height: 400px; overflow-y: auto;">
+        <pre class="is-size-7" style="white-space: pre-wrap; word-break: break-all; width: 100%;" x-text="panelData.rawYaml"></pre>
+      </div>
+    </div>
   </section>
 </article>

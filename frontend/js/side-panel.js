@@ -17,6 +17,7 @@ export default () => ({
   showAnno: false,
   showProps: true,
   showContainers: true,
+  showYaml: false,
   isPod: false,
 
   /** @type {PanelData} */
@@ -228,6 +229,7 @@ export default () => ({
       containers,
       labels,
       annotations,
+      rawYaml: JSON.stringify(res, null, 2),
     }
   },
 
