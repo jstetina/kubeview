@@ -283,17 +283,20 @@ Alpine.data('mainApp', () => ({
           if (viewParam === 'operator' || !queryNs) {
             this.operatorMode = true
             this.showWelcome = false
-            await this.fetchOperatorView()
+            try {
+              await this.fetchOperatorView()
+            } catch (fetchErr) {
+              console.error('fetchOperatorView failed:', fetchErr)
+            }
 
-            // Apply URL search/filters AFTER data is loaded
             if (this.urlFilters.q) {
               await this.searchAndExpandPaths(this.urlFilters.q)
             }
           }
         }
       }
-    } catch (_err) {
-      console.log('No operator config available')
+    } catch (err) {
+      console.error('Operator config error:', err)
     }
 
     // Handle post render event to show a toast if no nodes are present
@@ -472,22 +475,29 @@ Alpine.data('mainApp', () => ({
 
     window.dispatchEvent(new CustomEvent('closePanel'))
 
+    console.log('fetchOperatorView: starting')
+
     // Try GraphQL endpoint first (fast, cached in DB)
     const clusterId = await this._getClusterId()
+    console.log('fetchOperatorView: clusterId =', clusterId)
     let result = null
 
     if (clusterId) {
       result = await this._fetchGraphQL(clusterId)
+      console.log('fetchOperatorView: graphql result =', result ? 'ok' : 'null')
     }
 
     // Fallback: direct K8s API
     if (!result) {
+      console.log('fetchOperatorView: trying direct K8s API')
       let res
       try {
         res = await fetch(`api/operator-view?clientID=${getClientId()}`)
         if (!res.ok) throw new Error(`HTTP error ${res.status}: ${res.statusText}`)
         result = await res.json()
+        console.log('fetchOperatorView: K8s API result keys =', Object.keys(result))
       } catch (err) {
+        console.error('fetchOperatorView: K8s API failed:', err)
         this.showError(`Failed to fetch operator view: ${err.message}`, res)
         return
       }
@@ -498,8 +508,12 @@ Alpine.data('mainApp', () => ({
 
     clearCache()
     this._loadResult(result)
+    console.log('fetchOperatorView: edges =', this._operatorExtraEdges.length, 'cache size =', getResById('_') ? 'has data' : 'checking...')
     buildTree(this._operatorExtraEdges)
+    const vis = getVisibleUids()
+    console.log('fetchOperatorView: visible UIDs =', vis.size)
     await this.renderTreeView()
+    console.log('fetchOperatorView: renderTreeView complete')
 
     if (this.urlFilters.q) {
       await this.searchAndExpandPaths(this.urlFilters.q)
