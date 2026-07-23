@@ -59,9 +59,11 @@ export function addResource(res) {
   // Always cache first so label/owner filters can access all resources
   store(res)
 
-  // Endpoints & EndpointSlice are cached but not added to the graph
-  if (res.kind === 'Endpoints' || res.kind === 'EndpointSlice') {
-    return
+  // In operator mode, show all resource types including EndpointSlices
+  if (!_operatorMode) {
+    if (res.kind === 'Endpoints' || res.kind === 'EndpointSlice') {
+      return
+    }
   }
 
   // Events are not added to the graph

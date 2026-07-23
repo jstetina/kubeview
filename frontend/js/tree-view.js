@@ -392,6 +392,19 @@ export function getDescendantCount(uid) {
   return count
 }
 
+/**
+ * Expand a node and all its descendants recursively.
+ * @param {string} uid
+ */
+export function expandSubtree(uid) {
+  if (!hasChildren(uid)) return
+  expandedNodes.add(uid)
+  const children = childrenMap.get(uid) || []
+  for (const childUid of children) {
+    expandSubtree(childUid)
+  }
+}
+
 export function expandAll() {
   const allResources = queryRes(() => true)
 

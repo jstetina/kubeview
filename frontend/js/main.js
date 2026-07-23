@@ -32,6 +32,7 @@ import {
   expandAll,
   collapseAll,
   expandPathsToMatching,
+  expandSubtree,
 } from './tree-view.js'
 import sidePanel from './side-panel.js'
 import eventsDialog from './events-dialog.js'
@@ -653,7 +654,9 @@ Alpine.data('mainApp', () => ({
       graph.setLayout(dagreLayout)
       await graph.render()
 
-      // Highlight matched/filtered nodes with a bright outline
+      await graph.layout()
+
+      // Highlight matched/filtered nodes with a bright outline (after layout to not get overwritten)
       if (this._highlightedNodes.size > 0) {
         const allNodes = graph.getNodeData()
         const updates = allNodes
@@ -671,10 +674,9 @@ Alpine.data('mainApp', () => ({
 
         if (updates.length > 0) {
           graph.updateNodeData(updates)
+          await graph.draw()
         }
       }
-
-      await graph.layout()
 
       if (focusNodeIds && focusNodeIds.length > 0) {
         await this.focusOnNodes(focusNodeIds)
@@ -692,10 +694,12 @@ Alpine.data('mainApp', () => ({
    */
   async searchAndExpandPaths(query) {
     const q = query.toLowerCase()
-    collapseAll()
     this._highlightedNodes = new Set()
 
-    const matched = expandPathsToMatching((res) => {
+    const { queryRes: qr } = await import('./cache.js')
+    const allCached = qr(() => true)
+    const matched = allCached.filter((res) => {
+      if (res._virtual) return false
       const name = (res.metadata?.name || '').toLowerCase()
       const kind = (res.kind || '').toLowerCase()
       return name.includes(q) || kind.includes(q)
@@ -703,16 +707,106 @@ Alpine.data('mainApp', () => ({
 
     if (matched.length === 0) {
       showToast(`No resources matching "${query}"`, 2000, 'top-center', 'warning')
+      collapseAll()
       await this.renderTreeView()
       return
     }
 
-    showToast(`Found ${matched.length} matching resource(s)`, 2000, 'top-center', 'info')
+    const matchedUids = new Set(matched.map((r) => r.metadata.uid))
 
-    // Set highlighted nodes for visual distinction
-    this._highlightedNodes = new Set(matched)
+    // Collect all connected resources: walk edges in both directions from matched nodes
+    const connectedUids = new Set(matchedUids)
+    const edgeSet = new Set()
 
-    await this.renderTreeView(matched)
+    const walkConnected = (uid, depth) => {
+      if (depth > 10) return
+      for (const [srcUid, tgtUid] of this._operatorExtraEdges.map((e) => [e.sourceUid, e.targetUid])) {
+        if (srcUid === uid && !connectedUids.has(tgtUid)) {
+          connectedUids.add(tgtUid)
+          edgeSet.add(`${srcUid}:${tgtUid}`)
+          walkConnected(tgtUid, depth + 1)
+        }
+        if (tgtUid === uid && !connectedUids.has(srcUid)) {
+          connectedUids.add(srcUid)
+          edgeSet.add(`${srcUid}:${tgtUid}`)
+          walkConnected(srcUid, depth + 1)
+        }
+      }
+    }
+
+    for (const uid of matchedUids) {
+      walkConnected(uid, 0)
+    }
+
+    // Render directly: all connected resources + edges between them
+    this._highlightedNodes = matchedUids
+    await this.renderFilteredGraph(connectedUids)
+  },
+
+  /**
+   * Render a flat graph of specific resources and all edges between them.
+   * Bypasses the tree expand/collapse model.
+   * @param {Set<string>} uids
+   */
+  async renderFilteredGraph(uids) {
+    await graph.clear()
+
+    for (const uid of uids) {
+      const res = getResById(uid)
+      if (res) {
+        addResource(res)
+      }
+    }
+
+    // Add ALL edges between visible nodes
+    for (const edge of this._operatorExtraEdges) {
+      if (uids.has(edge.sourceUid) && uids.has(edge.targetUid)) {
+        addEdge(edge.sourceUid, edge.targetUid)
+      }
+    }
+
+    // Also add ownerReference edges from the resources themselves
+    for (const uid of uids) {
+      const res = getResById(uid)
+      if (res?.metadata?.ownerReferences) {
+        for (const ref of res.metadata.ownerReferences) {
+          if (uids.has(ref.uid)) {
+            addEdge(ref.uid, uid)
+          }
+        }
+      }
+    }
+
+    try {
+      graph.setLayout(dagreLayout)
+      await graph.render()
+      await graph.layout()
+
+      // Apply highlights
+      if (this._highlightedNodes.size > 0) {
+        const allNodes = graph.getNodeData()
+        const updates = allNodes
+          .filter((n) => this._highlightedNodes.has(n.id))
+          .map((n) => ({
+            ...n,
+            style: {
+              ...n.style,
+              stroke: '#FFD700',
+              lineWidth: 4,
+              shadowColor: '#FFD700',
+              shadowBlur: 12,
+            },
+          }))
+        if (updates.length > 0) {
+          graph.updateNodeData(updates)
+          await graph.draw()
+        }
+      }
+
+      await fitToVisible(graph, true)
+    } catch (e) {
+      console.error('Error rendering filtered graph:', e)
+    }
   },
 
   /**
