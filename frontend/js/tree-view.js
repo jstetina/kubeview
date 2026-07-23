@@ -167,7 +167,8 @@ export function buildTree(edges = []) {
 
   if (orphansByKind.size > 0) {
     // Find the primary CSV to attach these to, or create a standalone root
-    const primaryCSV = csvs.length > 0 ? csvs[0] : null
+    const allCSVs = resourcesByKind.get('ClusterServiceVersion') || []
+    const primaryCSV = allCSVs.length > 0 ? allCSVs[0] : null
     const parentUid = primaryCSV ? primaryCSV.metadata.uid : null
 
     for (const [kind, instances] of orphansByKind) {
