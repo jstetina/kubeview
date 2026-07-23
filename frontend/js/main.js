@@ -694,6 +694,7 @@ Alpine.data('mainApp', () => ({
    */
   async searchAndExpandPaths(query) {
     const q = query.toLowerCase()
+    collapseAll()
     this._highlightedNodes = new Set()
 
     const { queryRes: qr } = await import('./cache.js')
@@ -707,107 +708,26 @@ Alpine.data('mainApp', () => ({
 
     if (matched.length === 0) {
       showToast(`No resources matching "${query}"`, 2000, 'top-center', 'warning')
-      collapseAll()
       await this.renderTreeView()
       return
     }
 
     const matchedUids = new Set(matched.map((r) => r.metadata.uid))
 
-    // Collect all connected resources: walk edges in both directions from matched nodes
-    const connectedUids = new Set(matchedUids)
-    const edgeSet = new Set()
-
-    const walkConnected = (uid, depth) => {
-      if (depth > 10) return
-      for (const [srcUid, tgtUid] of this._operatorExtraEdges.map((e) => [e.sourceUid, e.targetUid])) {
-        if (srcUid === uid && !connectedUids.has(tgtUid)) {
-          connectedUids.add(tgtUid)
-          edgeSet.add(`${srcUid}:${tgtUid}`)
-          walkConnected(tgtUid, depth + 1)
-        }
-        if (tgtUid === uid && !connectedUids.has(srcUid)) {
-          connectedUids.add(srcUid)
-          edgeSet.add(`${srcUid}:${tgtUid}`)
-          walkConnected(srcUid, depth + 1)
-        }
-      }
-    }
-
+    // Expand paths from root to each match so ancestry is visible
     for (const uid of matchedUids) {
-      walkConnected(uid, 0)
+      expandPathTo(uid)
     }
 
-    // Render directly: all connected resources + edges between them
+    // Expand each match and its full subtree so children are visible and expandable
+    for (const uid of matchedUids) {
+      expandSubtree(uid)
+    }
+
     this._highlightedNodes = matchedUids
-    await this.renderFilteredGraph(connectedUids)
+    await this.renderTreeView([...matchedUids])
   },
 
-  /**
-   * Render a flat graph of specific resources and all edges between them.
-   * Bypasses the tree expand/collapse model.
-   * @param {Set<string>} uids
-   */
-  async renderFilteredGraph(uids) {
-    await graph.clear()
-
-    for (const uid of uids) {
-      const res = getResById(uid)
-      if (res) {
-        addResource(res)
-      }
-    }
-
-    // Add ALL edges between visible nodes
-    for (const edge of this._operatorExtraEdges) {
-      if (uids.has(edge.sourceUid) && uids.has(edge.targetUid)) {
-        addEdge(edge.sourceUid, edge.targetUid)
-      }
-    }
-
-    // Also add ownerReference edges from the resources themselves
-    for (const uid of uids) {
-      const res = getResById(uid)
-      if (res?.metadata?.ownerReferences) {
-        for (const ref of res.metadata.ownerReferences) {
-          if (uids.has(ref.uid)) {
-            addEdge(ref.uid, uid)
-          }
-        }
-      }
-    }
-
-    try {
-      graph.setLayout(dagreLayout)
-      await graph.render()
-      await graph.layout()
-
-      // Apply highlights
-      if (this._highlightedNodes.size > 0) {
-        const allNodes = graph.getNodeData()
-        const updates = allNodes
-          .filter((n) => this._highlightedNodes.has(n.id))
-          .map((n) => ({
-            ...n,
-            style: {
-              ...n.style,
-              stroke: '#FFD700',
-              lineWidth: 4,
-              shadowColor: '#FFD700',
-              shadowBlur: 12,
-            },
-          }))
-        if (updates.length > 0) {
-          graph.updateNodeData(updates)
-          await graph.draw()
-        }
-      }
-
-      await fitToVisible(graph, true)
-    } catch (e) {
-      console.error('Error rendering filtered graph:', e)
-    }
-  },
 
   /**
    * Handle double-click on a node in operator mode to expand/collapse
