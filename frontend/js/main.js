@@ -475,11 +475,34 @@ Alpine.data('mainApp', () => ({
 
     window.dispatchEvent(new CustomEvent('closePanel'))
 
-    const t0 = performance.now()
-
     const clusterId = await this._getClusterId()
-    let result = null
 
+    // Phase 1: shallow fetch (depth 2) - show operators + direct children instantly
+    if (clusterId) {
+      const shallow = await this._fetchGraphQL(clusterId, 2)
+      if (shallow) {
+        this.isLoading = false
+        this.showWelcome = false
+        clearCache()
+        this._loadResult(shallow)
+        buildTree(this._operatorExtraEdges)
+        await this.renderTreeView()
+
+        // Phase 2: full fetch in background, re-render with complete data
+        this._fetchGraphQL(clusterId).then((full) => {
+          if (full) {
+            clearCache()
+            this._loadResult(full)
+            buildTree(this._operatorExtraEdges)
+            this.renderTreeView()
+          }
+        })
+        return
+      }
+    }
+
+    // Fallback: single full fetch
+    let result = null
     if (clusterId) {
       result = await this._fetchGraphQL(clusterId)
     }
@@ -496,20 +519,13 @@ Alpine.data('mainApp', () => ({
       }
     }
 
-    console.log(`Fetch: ${Math.round(performance.now() - t0)}ms`)
-
     this.isLoading = false
     this.showWelcome = false
 
     clearCache()
     this._loadResult(result)
     buildTree(this._operatorExtraEdges)
-
-    console.log(`Tree: ${Math.round(performance.now() - t0)}ms`)
-
     await this.renderTreeView()
-
-    console.log(`Render: ${Math.round(performance.now() - t0)}ms`)
 
     if (this.urlFilters.q) {
       await this.searchAndExpandPaths(this.urlFilters.q)
@@ -535,10 +551,12 @@ Alpine.data('mainApp', () => ({
   },
 
   /** Fetch operator view from GraphQL - full json only for CSVs (icons, owned CRDs) */
-  async _fetchGraphQL(clusterId) {
+  async _fetchGraphQL(clusterId, maxDepth = null) {
+    const depthParam = maxDepth !== null ? ', $maxDepth: Int' : ''
+    const depthArg = maxDepth !== null ? ', maxDepth: $maxDepth' : ''
     const query = `
-      query OperatorView($clusterId: ID!) {
-        operatorView(clusterId: $clusterId) {
+      query OperatorView($clusterId: ID!${depthParam}) {
+        operatorView(clusterId: $clusterId${depthArg}) {
           resources {
             uid namespace apiVersion kind name labels statusPhase statusReady
           }
@@ -551,11 +569,13 @@ Alpine.data('mainApp', () => ({
         }
       }
     `
+    const variables = { clusterId }
+    if (maxDepth !== null) variables.maxDepth = maxDepth
     try {
       const res = await fetch('api/graphql', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, variables: { clusterId } }),
+        body: JSON.stringify({ query, variables }),
       })
       if (!res.ok) return null
       const gqlResponse = await res.json()
