@@ -476,28 +476,13 @@ Alpine.data('mainApp', () => ({
 
     window.dispatchEvent(new CustomEvent('closePanel'))
 
-    // Phase 1: quick shallow fetch (depth 2) to show something immediately
+    // Try GraphQL endpoint first (fast, cached in DB)
     const clusterId = await this._getClusterId()
-    if (clusterId) {
-      const shallow = await this._fetchGraphQL(clusterId, 2)
-      if (shallow) {
-        this.isLoading = false
-        this.showWelcome = false
-        this._loadResult(shallow)
-        buildTree(this._operatorExtraEdges)
-        await this.renderTreeView()
-
-        // Phase 2: full fetch in background, then re-render
-        this._fetchFullAndRerender(clusterId)
-        return
-      }
-    }
-
-    // Fallback: try full GraphQL fetch
     let result = null
-    try {
-      result = await this.fetchFromGraphQL()
-    } catch (_err) {}
+
+    if (clusterId) {
+      result = await this._fetchGraphQL(clusterId)
+    }
 
     // Fallback: direct K8s API
     if (!result) {
@@ -515,11 +500,11 @@ Alpine.data('mainApp', () => ({
     this.isLoading = false
     this.showWelcome = false
 
+    clearCache()
     this._loadResult(result)
     buildTree(this._operatorExtraEdges)
     await this.renderTreeView()
 
-    // Apply URL search if present
     if (this.urlFilters.q) {
       await this.searchAndExpandPaths(this.urlFilters.q)
     }
@@ -543,12 +528,11 @@ Alpine.data('mainApp', () => ({
     }
   },
 
-  /** Fetch operator view with optional depth limit for shallow loading */
-  async _fetchGraphQL(clusterId, maxDepth = null) {
-    const depthArg = maxDepth ? `, maxDepth: ${maxDepth}` : ''
+  /** Fetch operator view from GraphQL */
+  async _fetchGraphQL(clusterId) {
     const query = `
       query OperatorView($clusterId: ID!) {
-        operatorView(clusterId: $clusterId${depthArg}) {
+        operatorView(clusterId: $clusterId) {
           resources {
             uid namespace apiVersion kind name json labels statusPhase statusReady
           }
@@ -573,20 +557,6 @@ Alpine.data('mainApp', () => ({
     }
   },
 
-  /** Background full fetch + re-render */
-  async _fetchFullAndRerender(clusterId) {
-    const full = await this._fetchGraphQL(clusterId)
-    if (full) {
-      clearCache()
-      this._loadResult(full)
-      buildTree(this._operatorExtraEdges)
-      await this.renderTreeView()
-
-      if (this.urlFilters.q) {
-        await this.searchAndExpandPaths(this.urlFilters.q)
-      }
-    }
-  },
 
   /** Transform GraphQL operatorView result into the internal format */
   _transformGraphQLResult(view) {
