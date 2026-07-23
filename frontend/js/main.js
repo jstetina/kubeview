@@ -534,13 +534,13 @@ Alpine.data('mainApp', () => ({
     }
   },
 
-  /** Fetch operator view from GraphQL */
+  /** Fetch operator view from GraphQL (lightweight - no full json blobs) */
   async _fetchGraphQL(clusterId) {
     const query = `
       query OperatorView($clusterId: ID!) {
         operatorView(clusterId: $clusterId) {
           resources {
-            uid namespace apiVersion kind name json labels statusPhase statusReady
+            uid namespace apiVersion kind name labels statusPhase statusReady
           }
           edges {
             sourceUid targetUid edgeType
@@ -570,7 +570,26 @@ Alpine.data('mainApp', () => ({
     const resources = {}
 
     for (const r of view.resources || []) {
-      const resObj = typeof r.json === 'string' ? JSON.parse(r.json) : r.json
+      // Build resource object from GraphQL fields (json may not be present for lightweight queries)
+      let resObj
+      if (r.json) {
+        resObj = typeof r.json === 'string' ? JSON.parse(r.json) : r.json
+      } else {
+        resObj = {
+          apiVersion: r.apiVersion || '',
+          kind: r.kind || '',
+          metadata: {
+            uid: r.uid,
+            name: r.name,
+            namespace: r.namespace || '',
+            labels: r.labels || {},
+            annotations: {},
+            ownerReferences: [],
+          },
+          spec: {},
+          status: { phase: r.statusPhase || undefined },
+        }
+      }
 
       if (r.kind === 'ClusterServiceVersion') {
         const baseName = r.name
