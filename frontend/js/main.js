@@ -12,7 +12,7 @@ import { Graph, GraphEvent } from '../ext/g6-esm.js'
 import { getConfig, saveConfig } from './config.js'
 import { getClientId, initEventStreaming, togglePaused } from './events.js'
 import { addResource, addEdge, processLinks, layout, setUrlKindsOverride, setOperatorMode } from './graph.js'
-import { clearCache, getResById } from './cache.js'
+import { clearCache, getResById, store } from './cache.js'
 import { showToast } from '../ext/toast.js'
 import {
   dagreLayout,
@@ -476,21 +476,30 @@ Alpine.data('mainApp', () => ({
 
     window.dispatchEvent(new CustomEvent('closePanel'))
 
-    let result
-    let dataSource = 'k8s-api'
+    // Phase 1: quick shallow fetch (depth 2) to show something immediately
+    const clusterId = await this._getClusterId()
+    if (clusterId) {
+      const shallow = await this._fetchGraphQL(clusterId, 2)
+      if (shallow) {
+        this.isLoading = false
+        this.showWelcome = false
+        this._loadResult(shallow)
+        buildTree(this._operatorExtraEdges)
+        await this.renderTreeView()
 
-    // Try GraphQL endpoint first (ocp-resource-monitor)
-    try {
-      const gqlResult = await this.fetchFromGraphQL()
-      if (gqlResult) {
-        result = gqlResult
-        dataSource = 'graphql'
+        // Phase 2: full fetch in background, then re-render
+        this._fetchFullAndRerender(clusterId)
+        return
       }
-    } catch (_err) {
-      if (this.cfg.debug) console.log('GraphQL not available, falling back to direct K8s API')
     }
 
-    // Fall back to direct K8s API
+    // Fallback: try full GraphQL fetch
+    let result = null
+    try {
+      result = await this.fetchFromGraphQL()
+    } catch (_err) {}
+
+    // Fallback: direct K8s API
     if (!result) {
       let res
       try {
@@ -506,96 +515,81 @@ Alpine.data('mainApp', () => ({
     this.isLoading = false
     this.showWelcome = false
 
-    if (this.cfg.debug) {
-      console.log(`📦 Operator view data (source: ${dataSource}):`, result)
-    }
-
-    clearCache()
-
-    const data = result.resources || {}
-    this._operatorExtraEdges = result.extraEdges || result.edges || []
-
-    const { store } = await import('./cache.js')
-
-    for (const kindKey in data) {
-      for (const r of data[kindKey] || []) {
-        store(r)
-      }
-    }
-
-    // If GraphQL returned flat resource list instead of grouped
-    if (Array.isArray(result.resources)) {
-      for (const r of result.resources) {
-        const resObj = r.json || r.resource_json || r
-        if (resObj.kind && resObj.metadata) {
-          store(resObj)
-        }
-      }
-    }
-
+    this._loadResult(result)
     buildTree(this._operatorExtraEdges)
     await this.renderTreeView()
 
+    // Apply URL search if present
+    if (this.urlFilters.q) {
+      await this.searchAndExpandPaths(this.urlFilters.q)
+    }
   },
 
-  /**
-   * Attempt to fetch operator view from the GraphQL endpoint (ocp-resource-monitor)
-   * @returns {Promise<any|null>} The result or null if GraphQL is not available
-   */
-  async fetchFromGraphQL() {
-    // First, discover the cluster ID
-    const clusterRes = await fetch('api/graphql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: '{ clusters { id name } }' }),
-    })
+  /** Get the GraphQL cluster ID */
+  async _getClusterId() {
+    try {
+      const res = await fetch('api/graphql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: '{ clusters { id name } }' }),
+      })
+      if (!res.ok) return null
+      const data = await res.json()
+      const clusters = data?.data?.clusters
+      if (!clusters || clusters.length === 0) return null
+      return clusters[0].id
+    } catch (_e) {
+      return null
+    }
+  },
 
-    if (!clusterRes.ok) return null
-
-    const clusterData = await clusterRes.json()
-    const clusters = clusterData?.data?.clusters
-    if (!clusters || clusters.length === 0) return null
-
-    const clusterId = clusters[0].id
-    console.log(`📡 Using GraphQL cluster: ${clusters[0].name} (${clusterId})`)
-
+  /** Fetch operator view with optional depth limit for shallow loading */
+  async _fetchGraphQL(clusterId, maxDepth = null) {
+    const depthArg = maxDepth ? `, maxDepth: ${maxDepth}` : ''
     const query = `
       query OperatorView($clusterId: ID!) {
-        operatorView(clusterId: $clusterId) {
+        operatorView(clusterId: $clusterId${depthArg}) {
           resources {
-            uid
-            namespace
-            apiVersion
-            kind
-            name
-            json
-            labels
-            statusPhase
-            statusReady
+            uid namespace apiVersion kind name json labels statusPhase statusReady
           }
           edges {
-            sourceUid
-            targetUid
-            edgeType
+            sourceUid targetUid edgeType
           }
         }
       }
     `
+    try {
+      const res = await fetch('api/graphql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables: { clusterId } }),
+      })
+      if (!res.ok) return null
+      const gqlResponse = await res.json()
+      if (gqlResponse.errors || !gqlResponse.data?.operatorView) return null
+      return this._transformGraphQLResult(gqlResponse.data.operatorView)
+    } catch (_e) {
+      return null
+    }
+  },
 
-    const res = await fetch('api/graphql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, variables: { clusterId } }),
-    })
+  /** Background full fetch + re-render */
+  async _fetchFullAndRerender(clusterId) {
+    const full = await this._fetchGraphQL(clusterId)
+    if (full) {
+      clearCache()
+      this._loadResult(full)
+      buildTree(this._operatorExtraEdges)
+      await this.renderTreeView()
 
-    if (!res.ok) return null
+      if (this.urlFilters.q) {
+        await this.searchAndExpandPaths(this.urlFilters.q)
+      }
+    }
+  },
 
-    const gqlResponse = await res.json()
-    if (gqlResponse.errors || !gqlResponse.data?.operatorView) return null
-
-    const view = gqlResponse.data.operatorView
-
-    // Deduplicate CSVs: keep only one per CSV name (prefer the operator namespace)
+  /** Transform GraphQL operatorView result into the internal format */
+  _transformGraphQLResult(view) {
     const seenCSVs = new Map()
     const resources = {}
 
@@ -613,7 +607,6 @@ Alpine.data('mainApp', () => ({
       resources[kindKey].push(resObj)
     }
 
-    // All edges from the DB (owner, ref, synthetic)
     const extraEdges = (view.edges || []).map((e) => ({
       sourceUid: e.sourceUid,
       targetUid: e.targetUid,
@@ -621,6 +614,28 @@ Alpine.data('mainApp', () => ({
 
     return { resources, extraEdges }
   },
+
+  /** Load a result into cache and set edges */
+  _loadResult(result) {
+    const data = result.resources || {}
+    this._operatorExtraEdges = result.extraEdges || result.edges || []
+
+    for (const kindKey in data) {
+      for (const r of data[kindKey] || []) {
+        store(r)
+      }
+    }
+
+    if (Array.isArray(result.resources)) {
+      for (const r of result.resources) {
+        const resObj = r.json || r.resource_json || r
+        if (resObj.kind && resObj.metadata) {
+          store(resObj)
+        }
+      }
+    }
+  },
+
 
   /** @type {Set<string>} UIDs of nodes that matched the current search/filter */
   _highlightedNodes: new Set(),
@@ -697,8 +712,8 @@ Alpine.data('mainApp', () => ({
     collapseAll()
     this._highlightedNodes = new Set()
 
-    const { queryRes: qr } = await import('./cache.js')
-    const allCached = qr(() => true)
+    const { queryRes } = await import('./cache.js')
+    const allCached = queryRes(() => true)
     const matched = allCached.filter((res) => {
       if (res._virtual) return false
       const name = (res.metadata?.name || '').toLowerCase()
