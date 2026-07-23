@@ -63,12 +63,6 @@
                 <option value="HorizontalPodAutoscaler" :selected="cfg.resFilter.includes('HorizontalPodAutoscaler')">
                   HorizontalPodAutoscalers
                 </option>
-                <template x-if="resourceTypes.filter(rt => !['Pod','Deployment','StatefulSet','DaemonSet','ReplicaSet','Service','Ingress','ConfigMap','Secret','Job','CronJob','PersistentVolumeClaim','HorizontalPodAutoscaler','Endpoints','EndpointSlice','Event','Namespace'].includes(rt.kind)).length > 0">
-                  <option disabled>-- Custom Resources:</option>
-                </template>
-                <template x-for="rt in resourceTypes.filter(rt => !['Pod','Deployment','StatefulSet','DaemonSet','ReplicaSet','Service','Ingress','ConfigMap','Secret','Job','CronJob','PersistentVolumeClaim','HorizontalPodAutoscaler','Endpoints','EndpointSlice','Event','Namespace'].includes(rt.kind))" :key="rt.kind">
-                  <option :value="rt.kind" :selected="cfg.resFilter.includes(rt.kind)" x-text="`${rt.kind} (${rt.group})`"></option>
-                </template>
               </select>
             </div>
           </div>

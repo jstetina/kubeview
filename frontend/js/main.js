@@ -498,11 +498,7 @@ Alpine.data('mainApp', () => ({
 
     clearCache()
     this._loadResult(result)
-    console.log('Edges loaded:', this._operatorExtraEdges.length)
     buildTree(this._operatorExtraEdges)
-    const { getRootNodes } = await import('./tree-view.js')
-    console.log('Root nodes after buildTree:', getRootNodes().size, [...getRootNodes()])
-    console.log('Visible UIDs:', getVisibleUids().size)
     await this.renderTreeView()
 
     if (this.urlFilters.q) {
