@@ -475,45 +475,41 @@ Alpine.data('mainApp', () => ({
 
     window.dispatchEvent(new CustomEvent('closePanel'))
 
-    console.log('fetchOperatorView: starting')
+    const t0 = performance.now()
 
-    // Try GraphQL endpoint first (fast, cached in DB)
     const clusterId = await this._getClusterId()
-    console.log('fetchOperatorView: clusterId =', clusterId)
     let result = null
 
     if (clusterId) {
       result = await this._fetchGraphQL(clusterId)
-      console.log('fetchOperatorView: graphql result =', result ? 'ok' : 'null')
     }
 
-    // Fallback: direct K8s API
     if (!result) {
-      console.log('fetchOperatorView: trying direct K8s API')
       let res
       try {
         res = await fetch(`api/operator-view?clientID=${getClientId()}`)
         if (!res.ok) throw new Error(`HTTP error ${res.status}: ${res.statusText}`)
         result = await res.json()
-        console.log('fetchOperatorView: K8s API result keys =', Object.keys(result))
       } catch (err) {
-        console.error('fetchOperatorView: K8s API failed:', err)
         this.showError(`Failed to fetch operator view: ${err.message}`, res)
         return
       }
     }
+
+    console.log(`Fetch: ${Math.round(performance.now() - t0)}ms`)
 
     this.isLoading = false
     this.showWelcome = false
 
     clearCache()
     this._loadResult(result)
-    console.log('fetchOperatorView: edges =', this._operatorExtraEdges.length, 'cache size =', getResById('_') ? 'has data' : 'checking...')
     buildTree(this._operatorExtraEdges)
-    const vis = getVisibleUids()
-    console.log('fetchOperatorView: visible UIDs =', vis.size)
+
+    console.log(`Tree: ${Math.round(performance.now() - t0)}ms`)
+
     await this.renderTreeView()
-    console.log('fetchOperatorView: renderTreeView complete')
+
+    console.log(`Render: ${Math.round(performance.now() - t0)}ms`)
 
     if (this.urlFilters.q) {
       await this.searchAndExpandPaths(this.urlFilters.q)
