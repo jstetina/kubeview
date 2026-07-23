@@ -108,93 +108,8 @@ export function buildTree(edges = []) {
     resourcesByKind.set(res.kind, list)
   }
 
-  // Step 1: For each CSV, create virtual CRD-kind nodes from spec.customresourcedefinitions.owned
-  // Filter out internal-objects (hidden in Console). Split into active (have instances) and inactive.
-  const csvs = resourcesByKind.get('ClusterServiceVersion') || []
-  for (const csv of csvs) {
-    const owned = csv.spec?.customresourcedefinitions?.owned || []
-    const seenKinds = new Set()
-    const activeCrds = []
-    const inactiveCrds = []
-
-    // Parse the internal-objects annotation to know which CRDs are hidden
-    let internalObjects = new Set()
-    try {
-      const raw = csv.metadata?.annotations?.['operators.operatorframework.io/internal-objects'] || '[]'
-      const parsed = JSON.parse(raw)
-      internalObjects = new Set(parsed)
-    } catch (_e) { /* ignore parse errors */ }
-
-    for (const crd of owned) {
-      const kind = crd.kind
-      const displayName = crd.displayName || kind
-      const crdFullName = crd.name || ''
-      if (!kind || seenKinds.has(kind)) continue
-      seenKinds.add(kind)
-
-      const isInternal = internalObjects.has(crdFullName)
-      const instances = resourcesByKind.get(kind) || []
-
-      if (instances.length > 0) {
-        // Always show CRDs that have instances (even internal ones) to complete the ownership chain
-        activeCrds.push({ kind, displayName, crdName: crdFullName, instances })
-      } else if (!isInternal) {
-        // Only show inactive CRDs if they're public (Provided APIs)
-        inactiveCrds.push({ kind, displayName, crdName: crdFullName })
-      }
-    }
-
-    // Create virtual nodes for active CRDs (shown directly under CSV)
-    for (const crd of activeCrds) {
-      const virtualUid = createVirtualCrdNode(csv, crd.kind, crd.displayName, crd.crdName, allUids, true)
-      addEdge(csv.metadata.uid, virtualUid)
-
-      for (const inst of crd.instances) {
-        addEdge(virtualUid, inst.metadata.uid)
-        allEdgePairs = allEdgePairs.filter(([s, t]) => !(s === csv.metadata.uid && t === inst.metadata.uid))
-      }
-    }
-
-    // Show inactive CRDs: if few enough, show directly under CSV; otherwise collapse into a "more" node
-    const COLLAPSE_THRESHOLD = 10
-    if (inactiveCrds.length > 0 && inactiveCrds.length <= COLLAPSE_THRESHOLD) {
-      for (const crd of inactiveCrds) {
-        const virtualUid = createVirtualCrdNode(csv, crd.kind, crd.displayName, crd.crdName, allUids, false)
-        addEdge(csv.metadata.uid, virtualUid)
-      }
-    } else if (inactiveCrds.length > COLLAPSE_THRESHOLD) {
-      const moreUid = `crd-more:${csv.metadata.uid}`
-      const moreRes = {
-        kind: 'CustomResourceDefinition',
-        apiVersion: 'apiextensions.k8s.io/v1',
-        metadata: {
-          uid: moreUid,
-          name: `${inactiveCrds.length} more CRDs`,
-          namespace: '',
-          labels: {},
-          annotations: {},
-          ownerReferences: [],
-        },
-        spec: {},
-        status: {},
-        _virtual: true,
-        _displayName: `${inactiveCrds.length} more CRDs (no instances)`,
-      }
-
-      virtualNodeData.set(moreUid, moreRes)
-      virtualNodes.add(moreUid)
-      store(moreRes)
-      allUids.add(moreUid)
-      addEdge(csv.metadata.uid, moreUid)
-
-      for (const crd of inactiveCrds) {
-        const virtualUid = createVirtualCrdNode(csv, crd.kind, crd.displayName, crd.crdName, allUids, false)
-        addEdge(moreUid, virtualUid)
-      }
-    }
-  }
-
-  // Step 2: Build parent-child from all edges
+  // Step 1: Build parent-child from ALL real edges first (owner, ref, endpoint, synthetic)
+  // This establishes the real K8s ownership hierarchy before any virtual nodes
   for (const [srcUid, tgtUid] of allEdgePairs) {
     if (!allUids.has(srcUid) || !allUids.has(tgtUid)) continue
     if (parentMap.has(tgtUid)) continue
@@ -207,7 +122,7 @@ export function buildTree(edges = []) {
     }
   }
 
-  // Step 3: ownerReferences fallback for resources not connected via edges
+  // Step 2: ownerReferences fallback for resources not yet connected
   for (const res of allResources) {
     const uid = res.metadata.uid
     if (parentMap.has(uid)) continue
@@ -222,7 +137,7 @@ export function buildTree(edges = []) {
     }
   }
 
-  // Step 4: determine roots
+  // Step 3: determine roots (CSVs and entrypoints with no parent)
   for (const res of allResources) {
     const uid = res.metadata.uid
     if ((ROOT_KINDS.has(res.kind) || ENTRYPOINT_KINDS.has(res.kind)) && !parentMap.has(uid)) {
