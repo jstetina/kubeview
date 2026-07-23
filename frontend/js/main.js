@@ -534,7 +534,7 @@ Alpine.data('mainApp', () => ({
     }
   },
 
-  /** Fetch operator view from GraphQL (lightweight - no full json blobs) */
+  /** Fetch operator view from GraphQL - full json only for CSVs (icons, owned CRDs) */
   async _fetchGraphQL(clusterId) {
     const query = `
       query OperatorView($clusterId: ID!) {
@@ -545,6 +545,9 @@ Alpine.data('mainApp', () => ({
           edges {
             sourceUid targetUid edgeType
           }
+        }
+        csvs: resources(clusterId: $clusterId, kinds: ["ClusterServiceVersion"]) {
+          uid kind name namespace json
         }
       }
     `
@@ -557,7 +560,7 @@ Alpine.data('mainApp', () => ({
       if (!res.ok) return null
       const gqlResponse = await res.json()
       if (gqlResponse.errors || !gqlResponse.data?.operatorView) return null
-      return this._transformGraphQLResult(gqlResponse.data.operatorView)
+      return this._transformGraphQLResult(gqlResponse.data.operatorView, gqlResponse.data.csvs)
     } catch (_e) {
       return null
     }
@@ -565,14 +568,26 @@ Alpine.data('mainApp', () => ({
 
 
   /** Transform GraphQL operatorView result into the internal format */
-  _transformGraphQLResult(view) {
+  _transformGraphQLResult(view, csvsFull = null) {
     const seenCSVs = new Map()
     const resources = {}
 
+    // Build a map of CSV full json data (with spec.icon, spec.customresourcedefinitions)
+    const csvJsonMap = new Map()
+    for (const csv of csvsFull || []) {
+      if (csv.json) {
+        const obj = typeof csv.json === 'string' ? JSON.parse(csv.json) : csv.json
+        csvJsonMap.set(csv.uid, obj)
+      }
+    }
+
     for (const r of view.resources || []) {
-      // Build resource object from GraphQL fields (json may not be present for lightweight queries)
       let resObj
-      if (r.json) {
+
+      // For CSVs, use the full json (has spec.icon, owned CRDs)
+      if (r.kind === 'ClusterServiceVersion' && csvJsonMap.has(r.uid)) {
+        resObj = csvJsonMap.get(r.uid)
+      } else if (r.json) {
         resObj = typeof r.json === 'string' ? JSON.parse(r.json) : r.json
       } else {
         resObj = {
