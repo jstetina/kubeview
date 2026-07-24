@@ -90,6 +90,16 @@
               </span>
             </p>
           </div>
+          <button
+            class="button ml-1"
+            :class="showAncestors ? 'is-warning' : 'is-dark'"
+            @click="showAncestors = !showAncestors"
+            title="Show ancestor path to root"
+            x-show="searchQuery && searchQuery.length >= 2"
+            x-transition
+          >
+            <span class="icon"><i class="fas fa-arrow-up"></i></span>
+          </button>
         </div>
       </div>
 

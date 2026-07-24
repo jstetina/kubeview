@@ -159,6 +159,8 @@ Alpine.data('mainApp', () => ({
   clusters: [],
   selectedClusterId: '',
 
+  showAncestors: false,
+
   // ===== Functions ============================================
 
   /**
@@ -243,6 +245,13 @@ Alpine.data('mainApp', () => ({
       this.fetchNamespace()
 
       channel.postMessage({ type: 'namespaceChange', namespace: this.namespace })
+    })
+
+    // Re-run search when ancestor toggle changes
+    this.$watch('showAncestors', async () => {
+      if (this.searchQuery && this.searchQuery.trim().length >= 2) {
+        await this.searchAndExpandPaths(this.searchQuery.trim())
+      }
     })
 
     // Double-click handler for expand/collapse in operator mode
@@ -682,7 +691,14 @@ Alpine.data('mainApp', () => ({
   async renderTreeView(focusNodeIds = null) {
     await graph.clear()
 
-    const visibleUids = getVisibleUids()
+    let visibleUids = getVisibleUids()
+
+    // When search is active, ensure matched nodes are always visible
+    if (this._highlightedNodes.size > 0) {
+      for (const uid of this._highlightedNodes) {
+        visibleUids.add(uid)
+      }
+    }
 
     for (const uid of visibleUids) {
       const res = getResById(uid)
@@ -763,20 +779,20 @@ Alpine.data('mainApp', () => ({
     }
 
     const matchedUids = new Set(matched.map((r) => r.metadata.uid))
-
-    // Expand paths from root to each match so ancestry is visible
-    for (const uid of matchedUids) {
-      expandPathTo(uid)
-    }
-
-    // Expand each match and its full subtree so children are visible and expandable
-    for (const uid of matchedUids) {
-      expandSubtree(uid)
-    }
-
     this._highlightedNodes = matchedUids
+    this._matchedUids = matchedUids
+
+    if (this.showAncestors) {
+      for (const uid of matchedUids) {
+        expandPathTo(uid)
+      }
+    }
+
     await this.renderTreeView([...matchedUids])
   },
+
+  /** @type {Set<string>} stored matched UIDs for re-applying ancestor toggle */
+  _matchedUids: new Set(),
 
 
   /**
