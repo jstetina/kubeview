@@ -26,29 +26,15 @@
       </div>
       <div class="navbar-start">
         <div class="navbar-item is-hidden-touch">
-          <!-- Operator mode indicator -->
-          <template x-if="operatorMode && operatorConfig">
-            <span class="tag is-info is-medium mr-2" x-text="operatorConfig.name">Operator View</span>
-          </template>
-
-          <!-- Main namespace selector (hidden in operator mode) -->
-          <template x-if="!operatorMode">
-            <div class="select">
-              <template x-if="namespaces !== null">
-                <select x-model="namespace" :disabled="isLoading || namespaces.length === 1">
-                  <option value="" disabled>Choose a namespace</option>
-                  <template x-for="ns in namespaces" :key="ns">
-                    <option :value="ns" x-text="ns" :selected="ns == namespace"></option>
-                  </template>
-                </select>
+          <!-- Cluster selector -->
+          <div class="select" x-show="clusters.length > 0">
+            <select x-model="selectedClusterId" :disabled="isLoading">
+              <template x-for="c in clusters" :key="c.id">
+                <option :value="c.id" x-text="c.name" :selected="c.id == selectedClusterId"></option>
               </template>
-              <template x-if="namespaces === null">
-                <select>
-                  <option value="" disabled selected>Loading...</option>
-                </select>
-              </template>
-            </div>
-          </template>
+            </select>
+          </div>
+          <span class="tag is-dark is-medium mr-2" x-show="clusters.length === 0">Loading...</span>
 
           <button class="button is-info" type="button" @click="refreshAll()" :disabled="isLoading" title="Refresh">
             <span class="icon"><i class="fas fa-rotate"></i></span>

@@ -155,6 +155,10 @@ Alpine.data('mainApp', () => ({
   /** @type {any} */
   operatorConfig: null,
 
+  /** @type {Array<{id: string, name: string}>} */
+  clusters: [],
+  selectedClusterId: '',
+
   // ===== Functions ============================================
 
   /**
@@ -271,34 +275,28 @@ Alpine.data('mainApp', () => ({
     // Load the initial namespaces
     await this.refreshNamespaces()
 
-    // Check for operator config -- if present and URL has ?view=operator or no ?ns=, switch to operator mode
-    try {
-      const opRes = await fetch('api/operator-config')
-      if (opRes.ok) {
-        const opData = await opRes.json()
-        if (opData && opData.name) {
-          this.operatorConfig = opData
-          console.log(`📋 Operator config loaded: ${opData.name}`)
-
-          const viewParam = urlParams.get('view')
-          if (viewParam === 'operator' || !queryNs) {
-            this.operatorMode = true
-            this.showWelcome = false
-            try {
-              await this.fetchOperatorView()
-            } catch (fetchErr) {
-              console.error('fetchOperatorView failed:', fetchErr)
-            }
-
-            if (this.urlFilters.q) {
-              await this.searchAndExpandPaths(this.urlFilters.q)
-            }
-          }
-        }
+    // Auto-enter operator view mode (default view)
+    const viewParam = urlParams.get('view')
+    if (viewParam === 'operator' || !queryNs) {
+      this.operatorMode = true
+      this.showWelcome = false
+      try {
+        await this.fetchOperatorView()
+      } catch (fetchErr) {
+        console.error('fetchOperatorView failed:', fetchErr)
       }
-    } catch (err) {
-      console.error('Operator config error:', err)
+
+      if (this.urlFilters.q) {
+        await this.searchAndExpandPaths(this.urlFilters.q)
+      }
     }
+
+    // Watch for cluster selection changes
+    this.$watch('selectedClusterId', async (newId) => {
+      if (!newId || !this.operatorMode) return
+      console.log(`Switching to cluster: ${newId}`)
+      await this.fetchOperatorView()
+    })
 
     // Handle post render event to show a toast if no nodes are present
     graph.on(GraphEvent.AFTER_RENDER, () => {
@@ -539,13 +537,19 @@ Alpine.data('mainApp', () => ({
       const res = await fetch('api/graphql', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: '{ clusters { id name } }' }),
+        body: JSON.stringify({ query: '{ clusters { id name apiHost } }' }),
       })
       if (!res.ok) return null
       const data = await res.json()
       const clusters = data?.data?.clusters
       if (!clusters || clusters.length === 0) return null
-      return clusters[0].id
+
+      this.clusters = clusters
+      if (!this.selectedClusterId) {
+        this.selectedClusterId = clusters[0].id
+      }
+
+      return this.selectedClusterId
     } catch (_e) {
       return null
     }
