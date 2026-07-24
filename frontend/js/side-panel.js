@@ -5,6 +5,40 @@ import { NodeEvent, CanvasEvent, GraphEvent } from '../ext/g6-esm.js'
 import { graph } from './main.js'
 import { getResById } from './cache.js'
 
+function jsonToYaml(obj, indent = 0) {
+  const pad = '  '.repeat(indent)
+  if (obj === null || obj === undefined) return `${pad}null`
+  if (typeof obj === 'boolean') return `${pad}${obj}`
+  if (typeof obj === 'number') return `${pad}${obj}`
+  if (typeof obj === 'string') {
+    if (obj.includes('\n') || obj.includes(':') || obj.includes('#') || obj.includes('"') || obj.includes("'") || obj === '') {
+      return `${pad}"${obj.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`
+    }
+    return `${pad}${obj}`
+  }
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return `${pad}[]`
+    return obj.map((item) => {
+      const val = jsonToYaml(item, indent + 1).trimStart()
+      return `${pad}- ${val}`
+    }).join('\n')
+  }
+  if (typeof obj === 'object') {
+    const keys = Object.keys(obj)
+    if (keys.length === 0) return `${pad}{}`
+    return keys.map((key) => {
+      const val = obj[key]
+      if (val === null || val === undefined) return `${pad}${key}: null`
+      if (typeof val === 'object') {
+        const nested = jsonToYaml(val, indent + 1)
+        return `${pad}${key}:\n${nested}`
+      }
+      return `${pad}${key}: ${jsonToYaml(val, 0).trimStart()}`
+    }).join('\n')
+  }
+  return `${pad}${String(obj)}`
+}
+
 // ==========================================================================================
 // Component for the side panel showing information about a resource
 // Also responsible for showing pod logs
@@ -229,7 +263,7 @@ export default () => ({
       containers,
       labels,
       annotations,
-      rawYaml: JSON.stringify(res, null, 2),
+      rawYaml: jsonToYaml(res),
     }
   },
 

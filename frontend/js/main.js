@@ -31,6 +31,7 @@ import {
   getChildren,
   expandAll,
   collapseAll,
+  expandPathTo,
   expandPathsToMatching,
   expandSubtree,
 } from './tree-view.js'
