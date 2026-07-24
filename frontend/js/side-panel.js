@@ -5,6 +5,24 @@ import { NodeEvent, CanvasEvent, GraphEvent } from '../ext/g6-esm.js'
 import { graph } from './main.js'
 import { getResById } from './cache.js'
 
+const BUILTIN_ICON_KINDS = new Set([
+  'configmap', 'cronjob', 'daemonset', 'deployment', 'horizontalpodautoscaler',
+  'ingress', 'job', 'persistentvolumeclaim', 'pod', 'replicaset', 'secret',
+  'service', 'statefulset',
+])
+
+function resolvePanelIcon(res) {
+  const kindLower = res.kind.toLowerCase()
+  if (BUILTIN_ICON_KINDS.has(kindLower)) return kindLower
+  if (res.kind === 'ClusterServiceVersion' && res.spec?.icon?.[0]) {
+    const icon = res.spec.icon[0]
+    if (icon.base64data && icon.mediatype) {
+      return `data:${icon.mediatype};base64,${icon.base64data}`
+    }
+  }
+  return 'crd-default'
+}
+
 function jsonToYaml(obj, indent = 0) {
   const pad = '  '.repeat(indent)
   if (obj === null || obj === undefined) return `${pad}null`
@@ -258,7 +276,7 @@ export default () => ({
     this.panelData = {
       kind: res.kind,
       id: res.metadata.uid,
-      icon: res.kind.toLowerCase(),
+      icon: resolvePanelIcon(res),
       props,
       containers,
       labels,

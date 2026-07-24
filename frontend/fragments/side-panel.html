@@ -2,7 +2,7 @@
 <article class="panel is-link" x-data="sidePanel" id="infoPanel" x-transition:enter="slidein"
   x-transition:leave="slideout" x-show="open" x-cloak>
   <p class="panel-heading py-2">
-    <img :src="`public/img/res/${panelData.icon}.svg`" width="32" height="32" class="valign-middle" />
+    <img :src="panelData.icon.startsWith('data:') ? panelData.icon : `public/img/res/${panelData.icon}.svg`" width="32" height="32" class="valign-middle" />
     <span x-text="panelData.kind" class="valign-middle"></span>
   </p>
   <section>
