@@ -96,7 +96,7 @@ export function buildTree(edges = []) {
   expandedNodes.clear()
   virtualNodes.clear()
   virtualNodeData.clear()
-  allEdgePairs = edges.map((e) => [e.sourceUid, e.targetUid])
+  allEdgePairs = edges.map((e) => [e.sourceUid, e.targetUid, e.edgeType || 'owner'])
 
   const allResources = queryRes(() => true)
   const allUids = new Set(allResources.map((r) => r.metadata.uid))
@@ -108,9 +108,12 @@ export function buildTree(edges = []) {
     resourcesByKind.set(res.kind, list)
   }
 
-  // Step 1: Build parent-child from ALL real edges first (owner, ref, endpoint, synthetic)
-  // This establishes the real K8s ownership hierarchy before any virtual nodes
-  for (const [srcUid, tgtUid] of allEdgePairs) {
+  // Step 1: Build parent-child from edges, prioritizing ownership edges
+  const edgePriority = { owner: 0, csv_owned: 1, synthetic: 2, ref: 3, endpoint: 4 }
+  const sortedEdges = [...allEdgePairs].sort((a, b) =>
+    (edgePriority[a[2]] ?? 5) - (edgePriority[b[2]] ?? 5)
+  )
+  for (const [srcUid, tgtUid] of sortedEdges) {
     if (!allUids.has(srcUid) || !allUids.has(tgtUid)) continue
     if (parentMap.has(tgtUid)) continue
 
