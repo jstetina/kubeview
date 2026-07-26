@@ -87,9 +87,10 @@ function createVirtualCrdNode(csv, kind, displayName, crdName, allUids, hasInsta
 /**
  * Build the tree from cached resources and DB edges.
  * Injects virtual CRD-kind nodes between CSVs and their owned CR instances.
- * @param {Array<{sourceUid: string, targetUid: string}>} edges
+ * @param {Array<{sourceUid: string, targetUid: string, edgeType?: string}>} edges
+ * @param {string[]} [entrypointKinds] - dynamic entrypoint kinds from operator config
  */
-export function buildTree(edges = []) {
+export function buildTree(edges = [], entrypointKinds = []) {
   childrenMap.clear()
   parentMap.clear()
   rootNodes.clear()
@@ -97,6 +98,8 @@ export function buildTree(edges = []) {
   virtualNodes.clear()
   virtualNodeData.clear()
   allEdgePairs = edges.map((e) => [e.sourceUid, e.targetUid, e.edgeType || 'owner'])
+
+  const dynamicEntrypoints = new Set(entrypointKinds)
 
   const allResources = queryRes(() => true)
   const allUids = new Set(allResources.map((r) => r.metadata.uid))
@@ -143,7 +146,7 @@ export function buildTree(edges = []) {
   // Step 3: determine roots (CSVs and entrypoints with no parent)
   for (const res of allResources) {
     const uid = res.metadata.uid
-    if ((ROOT_KINDS.has(res.kind) || ENTRYPOINT_KINDS.has(res.kind)) && !parentMap.has(uid)) {
+    if ((ROOT_KINDS.has(res.kind) || ENTRYPOINT_KINDS.has(res.kind) || dynamicEntrypoints.has(res.kind)) && !parentMap.has(uid)) {
       rootNodes.add(uid)
     }
   }
@@ -151,9 +154,10 @@ export function buildTree(edges = []) {
   // Step 5: orphaned resources (cached but no parent in tree, not a root, not built-in noise)
   // Group them by kind under virtual CRD-kind nodes attached to a catch-all "Discovered CRDs" root
   const SKIP_ORPHAN_KINDS = new Set([
-    'ClusterServiceVersion', 'DataScienceCluster', 'DSCInitialization',
+    'ClusterServiceVersion',
     'ConfigMap', 'Secret', 'Service', 'Endpoints', 'Event',
     'CustomResourceDefinition',
+    ...dynamicEntrypoints,
   ])
 
   const orphansByKind = new Map()

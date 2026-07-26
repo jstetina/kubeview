@@ -461,6 +461,7 @@ Alpine.data('mainApp', () => ({
 
   /** @type {Array<{sourceUid: string, targetUid: string}>} */
   _operatorExtraEdges: [],
+  _entrypointKinds: [],
 
   /**
    * Fetch the operator-centric cross-namespace view.
@@ -494,7 +495,7 @@ Alpine.data('mainApp', () => ({
         this.showWelcome = false
         clearCache()
         this._loadResult(shallow)
-        buildTree(this._operatorExtraEdges)
+        buildTree(this._operatorExtraEdges, this._entrypointKinds)
         await this.renderTreeView()
 
         // Phase 2: full fetch in background, re-render with complete data
@@ -502,7 +503,7 @@ Alpine.data('mainApp', () => ({
           if (full) {
             clearCache()
             this._loadResult(full)
-            buildTree(this._operatorExtraEdges)
+            buildTree(this._operatorExtraEdges, this._entrypointKinds)
             await this.renderTreeView()
 
             if (this.searchQuery && this.searchQuery.trim().length >= 2) {
@@ -539,7 +540,7 @@ Alpine.data('mainApp', () => ({
 
     clearCache()
     this._loadResult(result)
-    buildTree(this._operatorExtraEdges)
+    buildTree(this._operatorExtraEdges, this._entrypointKinds)
     await this.renderTreeView()
 
     if (this.urlFilters.q) {
@@ -584,6 +585,7 @@ Alpine.data('mainApp', () => ({
           edges {
             sourceUid targetUid edgeType
           }
+          operatorConfig
         }
         csvs: resources(clusterId: $clusterId, kinds: ["ClusterServiceVersion"]) {
           uid kind name namespace json
@@ -661,15 +663,29 @@ Alpine.data('mainApp', () => ({
     const extraEdges = (view.edges || []).map((e) => ({
       sourceUid: e.sourceUid,
       targetUid: e.targetUid,
+      edgeType: e.edgeType || 'owner',
     }))
 
-    return { resources, extraEdges }
+    // Extract entrypoint kinds from operator config if available
+    const entrypointKinds = []
+    if (view.operatorConfig && view.operatorConfig.operators) {
+      for (const op of view.operatorConfig.operators) {
+        for (const ep of op.entrypoints || []) {
+          if (ep.kind && !entrypointKinds.includes(ep.kind)) {
+            entrypointKinds.push(ep.kind)
+          }
+        }
+      }
+    }
+
+    return { resources, extraEdges, entrypointKinds }
   },
 
   /** Load a result into cache and set edges */
   _loadResult(result) {
     const data = result.resources || {}
     this._operatorExtraEdges = result.extraEdges || result.edges || []
+    this._entrypointKinds = result.entrypointKinds || []
 
     for (const kindKey in data) {
       for (const r of data[kindKey] || []) {
