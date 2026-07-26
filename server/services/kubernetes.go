@@ -813,25 +813,6 @@ func findGroupForKind(k *Kubernetes, kind string) string {
 		}
 	}
 
-	// Fallback: check common ODH groups
-	kindLower := strings.ToLower(kind)
-	commonGroups := []string{
-		"datasciencecluster.opendatahub.io",
-		"dscinitialization.opendatahub.io",
-		"components.platform.opendatahub.io",
-		"services.platform.opendatahub.io",
-		"features.opendatahub.io",
-		"serving.kserve.io",
-		"trustyai.opendatahub.io",
-	}
-
-	for _, group := range commonGroups {
-		items, err := k.ListClusterScopedResources(group, "v1", kindLower+"s")
-		if err == nil && len(items) >= 0 {
-			return group
-		}
-	}
-
 	return ""
 }
 
