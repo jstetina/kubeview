@@ -497,12 +497,18 @@ Alpine.data('mainApp', () => ({
         await this.renderTreeView()
 
         // Phase 2: full fetch in background, re-render with complete data
-        this._fetchGraphQL(clusterId).then((full) => {
+        this._fetchGraphQL(clusterId).then(async (full) => {
           if (full) {
             clearCache()
             this._loadResult(full)
             buildTree(this._operatorExtraEdges)
-            this.renderTreeView()
+            await this.renderTreeView()
+
+            if (this.searchQuery && this.searchQuery.trim().length >= 2) {
+              await this.searchAndExpandPaths(this.searchQuery.trim())
+            } else if (this.hasActiveUrlFilters()) {
+              this.applyUrlFilters()
+            }
           }
         })
         return
@@ -789,6 +795,10 @@ Alpine.data('mainApp', () => ({
     }
 
     await this.renderTreeView([...matchedUids])
+
+    if (this.hasActiveUrlFilters()) {
+      this.applyUrlFilters()
+    }
   },
 
   /** @type {Set<string>} stored matched UIDs for re-applying ancestor toggle */
@@ -812,6 +822,10 @@ Alpine.data('mainApp', () => ({
     // Pass focus targets so renderTreeView skips fitToVisible and focuses on children instead
     const focusTargets = !wasExpanded ? [nodeId, ...getChildren(nodeId)] : null
     await this.renderTreeView(focusTargets)
+
+    if (this.hasActiveUrlFilters()) {
+      this.applyUrlFilters()
+    }
   },
 
   /**
