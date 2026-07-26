@@ -310,7 +310,7 @@ Alpine.data('mainApp', () => ({
 
     // Handle post render event to show a toast if no nodes are present
     graph.on(GraphEvent.AFTER_RENDER, () => {
-      if (graph.getNodeData().length === 0) {
+      if (graph.getNodeData().length === 0 && !this.isLoading && !this._fullFetchPending) {
         showToast('No resources found<br>Check your filter settings', 3000, 'top-center', 'warning')
       }
     })
@@ -462,6 +462,7 @@ Alpine.data('mainApp', () => ({
   /** @type {Array<{sourceUid: string, targetUid: string}>} */
   _operatorExtraEdges: [],
   _entrypointKinds: [],
+  _fullFetchPending: false,
 
   /**
    * Fetch the operator-centric cross-namespace view.
@@ -510,7 +511,9 @@ Alpine.data('mainApp', () => ({
         await this.renderTreeView()
 
         // Phase 2: full fetch in background, re-render with complete data for expansion
+        this._fullFetchPending = true
         this._fetchGraphQL(clusterId).then(async (full) => {
+          this._fullFetchPending = false
           if (full) {
             clearCache()
             this._loadResult(full)
@@ -885,7 +888,9 @@ Alpine.data('mainApp', () => ({
     })
 
     if (matched.length === 0) {
-      showToast(`No resources matching "${query}"`, 2000, 'top-center', 'warning')
+      if (!this._fullFetchPending) {
+        showToast(`No resources matching "${query}"`, 2000, 'top-center', 'warning')
+      }
       await this.renderTreeView()
       return
     }
