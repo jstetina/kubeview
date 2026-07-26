@@ -354,6 +354,21 @@ export function expandPathTo(targetUid) {
 }
 
 /**
+ * Get the ancestor chain UIDs from a target node up to the root (inclusive).
+ * @param {string} targetUid
+ * @returns {string[]}
+ */
+export function getAncestorChain(targetUid) {
+  const chain = []
+  let current = parentMap.get(targetUid)
+  while (current) {
+    chain.push(current)
+    current = parentMap.get(current)
+  }
+  return chain
+}
+
+/**
  * Expand paths to all matching nodes (by predicate on cached resources).
  * Returns the UIDs that matched.
  * @param {function(any): boolean} predicate

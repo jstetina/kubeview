@@ -34,6 +34,7 @@ import {
   expandPathTo,
   expandPathsToMatching,
   expandSubtree,
+  getAncestorChain,
 } from './tree-view.js'
 import sidePanel from './side-panel.js'
 import eventsDialog from './events-dialog.js'
@@ -699,8 +700,18 @@ Alpine.data('mainApp', () => ({
 
     let visibleUids = getVisibleUids()
 
-    // When search is active, ensure matched nodes are always visible
-    if (this._highlightedNodes.size > 0) {
+    // When search is active with showAncestors, show only path nodes + matched nodes
+    // rather than all siblings of expanded ancestors
+    if (this._highlightedNodes.size > 0 && this.showAncestors) {
+      const pathUids = new Set()
+      for (const uid of this._highlightedNodes) {
+        pathUids.add(uid)
+        for (const ancestor of getAncestorChain(uid)) {
+          pathUids.add(ancestor)
+        }
+      }
+      visibleUids = pathUids
+    } else if (this._highlightedNodes.size > 0) {
       for (const uid of this._highlightedNodes) {
         visibleUids.add(uid)
       }
