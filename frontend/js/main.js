@@ -487,9 +487,20 @@ Alpine.data('mainApp', () => ({
 
     const clusterId = await this._getClusterId()
 
-    // Phase 1: shallow fetch (depth 2) - show operators + direct children instantly
+    // Determine if we have active filters that warrant a targeted first fetch
+    const hasFilters = this.urlFilters.q || this.urlFilters.kinds || this.urlFilters.owner || this.urlFilters.labels
+
+    // Phase 1: quick initial render
     if (clusterId) {
-      const shallow = await this._fetchGraphQL(clusterId, 2)
+      let shallow
+      if (hasFilters && this.urlFilters.kinds) {
+        // Filtered view: fetch just the filtered resource kinds for instant display
+        shallow = await this._fetchFilteredShallow(clusterId, this.urlFilters.kinds)
+      } else {
+        // Default view: depth-limited fetch for top-level operators + direct children
+        shallow = await this._fetchGraphQL(clusterId, 2)
+      }
+
       if (shallow) {
         this.isLoading = false
         this.showWelcome = false
@@ -498,7 +509,7 @@ Alpine.data('mainApp', () => ({
         buildTree(this._operatorExtraEdges, this._entrypointKinds)
         await this.renderTreeView()
 
-        // Phase 2: full fetch in background, re-render with complete data
+        // Phase 2: full fetch in background, re-render with complete data for expansion
         this._fetchGraphQL(clusterId).then(async (full) => {
           if (full) {
             clearCache()
@@ -604,6 +615,74 @@ Alpine.data('mainApp', () => ({
       const gqlResponse = await res.json()
       if (gqlResponse.errors || !gqlResponse.data?.operatorView) return null
       return this._transformGraphQLResult(gqlResponse.data.operatorView, gqlResponse.data.csvs)
+    } catch (_e) {
+      return null
+    }
+  },
+
+  /**
+   * Fetch a filtered subset of resources for quick initial display.
+   * Returns resources matching the kinds filter without full tree edges.
+   * @param {string} clusterId
+   * @param {string[]} kinds
+   */
+  async _fetchFilteredShallow(clusterId, kinds) {
+    const query = `
+      query FilteredResources($clusterId: ID!, $kinds: [String!]) {
+        resources(clusterId: $clusterId, kinds: $kinds) {
+          uid kind name namespace apiVersion statusPhase statusReady labels
+        }
+        csvs: resources(clusterId: $clusterId, kinds: ["ClusterServiceVersion"]) {
+          uid kind name namespace json
+        }
+      }
+    `
+    try {
+      const res = await fetch('api/graphql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables: { clusterId, kinds } }),
+      })
+      if (!res.ok) return null
+      const gqlResponse = await res.json()
+      if (gqlResponse.errors || !gqlResponse.data?.resources) return null
+
+      const resources = {}
+      for (const r of gqlResponse.data.resources) {
+        const resObj = {
+          apiVersion: r.apiVersion || '',
+          kind: r.kind || '',
+          metadata: {
+            uid: r.uid,
+            name: r.name,
+            namespace: r.namespace || '',
+            labels: r.labels || {},
+            annotations: {},
+            ownerReferences: [],
+          },
+          spec: {},
+          status: { phase: r.statusPhase || undefined },
+        }
+        const kindKey = r.kind.toLowerCase() + 's'
+        if (!resources[kindKey]) resources[kindKey] = []
+        resources[kindKey].push(resObj)
+      }
+
+      // Include CSVs for context (they're roots in the tree)
+      const seenCSVs = new Map()
+      for (const csv of gqlResponse.data.csvs || []) {
+        if (seenCSVs.has(csv.name)) continue
+        seenCSVs.set(csv.name, true)
+        const csvObj = csv.json ? (typeof csv.json === 'string' ? JSON.parse(csv.json) : csv.json) : {
+          apiVersion: 'operators.coreos.com/v1alpha1', kind: 'ClusterServiceVersion',
+          metadata: { uid: csv.uid, name: csv.name, namespace: csv.namespace, labels: {}, annotations: {}, ownerReferences: [] },
+          spec: {}, status: {},
+        }
+        if (!resources.clusterserviceversions) resources.clusterserviceversions = []
+        resources.clusterserviceversions.push(csvObj)
+      }
+
+      return { resources, extraEdges: [], entrypointKinds: [] }
     } catch (_e) {
       return null
     }
