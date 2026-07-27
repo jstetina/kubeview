@@ -158,6 +158,7 @@ Alpine.data('mainApp', () => ({
   selectedClusterId: '',
 
   showAncestors: false,
+  _isRendering: false,
 
   // ===== Functions ============================================
 
@@ -214,6 +215,7 @@ Alpine.data('mainApp', () => ({
 
     // Listen for resource addition events, and re-run the search & filtering
     graph.on(GraphEvent.BEFORE_ELEMENT_CREATE, () => {
+      if (this._isRendering) return
       if (this.searchQuery || this.hasActiveUrlFilters()) {
         this.applyUrlFilters()
       }
@@ -800,12 +802,10 @@ Alpine.data('mainApp', () => ({
       for (const uid of this._highlightedNodes) {
         pathUids.add(uid)
         const chain = getAncestorChain(uid)
-        console.log(`[showAncestors] node=${uid}, ancestors=${chain.length}`, chain.map(a => getResById(a)?.kind + '/' + getResById(a)?.metadata?.name))
         for (const ancestor of chain) {
           pathUids.add(ancestor)
         }
       }
-      console.log(`[showAncestors] pathUids total: ${pathUids.size}`)
       visibleUids = pathUids
     } else if (this._highlightedNodes.size > 0) {
       for (const uid of this._highlightedNodes) {
@@ -838,10 +838,12 @@ Alpine.data('mainApp', () => ({
     console.log(`[renderTreeView] setting data: ${nodes.length} nodes, ${edges.length} edges`)
 
     try {
+      this._isRendering = true
       graph.setData({ nodes, edges })
       graph.setLayout(dagreLayout)
       await graph.render()
       await graph.layout()
+      this._isRendering = false
 
       // Highlight matched/filtered nodes with a bright outline (after layout to not get overwritten)
       if (this._highlightedNodes.size > 0) {
@@ -871,6 +873,7 @@ Alpine.data('mainApp', () => ({
         await fitToVisible(graph, true)
       }
     } catch (e) {
+      this._isRendering = false
       console.error('💥 Error rendering graph:', e)
     }
   },
@@ -906,15 +909,16 @@ Alpine.data('mainApp', () => ({
     this._matchedUids = matchedUids
 
     if (this.showAncestors) {
-      console.log(`[searchAndExpandPaths] showAncestors=true, expanding paths for ${matchedUids.size} nodes`)
-      for (const uid of matchedUids) {
-        expandPathTo(uid)
-      }
+      console.log(`[showAncestors] rendering ancestor paths for ${matchedUids.size} matched nodes`)
+    }
+
+    for (const uid of matchedUids) {
+      expandPathTo(uid)
     }
 
     await this.renderTreeView([...matchedUids])
 
-    if (this.hasActiveUrlFilters()) {
+    if (this.hasActiveUrlFilters() && !this.showAncestors) {
       this.applyUrlFilters()
     }
   },
@@ -941,7 +945,7 @@ Alpine.data('mainApp', () => ({
     const focusTargets = !wasExpanded ? [nodeId, ...getChildren(nodeId)] : null
     await this.renderTreeView(focusTargets)
 
-    if (this.hasActiveUrlFilters()) {
+    if (this.hasActiveUrlFilters() && !this.showAncestors) {
       this.applyUrlFilters()
     }
   },
