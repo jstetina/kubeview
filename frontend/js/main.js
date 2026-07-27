@@ -11,7 +11,7 @@ import { Graph, GraphEvent } from '../ext/g6-esm.js'
 
 import { getConfig, saveConfig } from './config.js'
 import { getClientId, initEventStreaming, togglePaused } from './events.js'
-import { addResource, addEdge, processLinks, layout, setUrlKindsOverride, setOperatorMode } from './graph.js'
+import { addResource, addEdge, processLinks, layout, setUrlKindsOverride, setOperatorMode, makeNode } from './graph.js'
 import { clearCache, getResById, store } from './cache.js'
 import { showToast } from '../ext/toast.js'
 import {
@@ -791,8 +791,6 @@ Alpine.data('mainApp', () => ({
    * @param {string[]|null} [focusNodeIds] - if provided, zoom to these nodes instead of fitToVisible
    */
   async renderTreeView(focusNodeIds = null) {
-    await graph.clear()
-
     let visibleUids = getVisibleUids()
 
     // When search is active with showAncestors, show only path nodes + matched nodes
@@ -815,10 +813,16 @@ Alpine.data('mainApp', () => ({
       }
     }
 
+    // Build node and edge data arrays
+    const nodes = []
+    const edges = []
+
     for (const uid of visibleUids) {
       const res = getResById(uid)
       if (res) {
-        addResource(res)
+        nodes.push(makeNode(res))
+      } else {
+        console.warn(`[renderTreeView] getResById returned null for uid=${uid}`)
       }
     }
 
@@ -826,12 +830,15 @@ Alpine.data('mainApp', () => ({
       const children = getChildren(uid)
       for (const childUid of children) {
         if (visibleUids.has(childUid)) {
-          addEdge(uid, childUid)
+          edges.push({ source: uid, target: childUid, id: `${uid}.${childUid}` })
         }
       }
     }
 
+    console.log(`[renderTreeView] setting data: ${nodes.length} nodes, ${edges.length} edges`)
+
     try {
+      graph.setData({ nodes, edges })
       graph.setLayout(dagreLayout)
       await graph.render()
       await graph.layout()

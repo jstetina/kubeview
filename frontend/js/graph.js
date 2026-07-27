@@ -102,9 +102,7 @@ export function addResource(res) {
 
     return res.metadata.uid
   } catch (e) {
-    if (getConfig().debug) {
-      console.warn(`🍒 Unable to add node for resource ${res.metadata.name} (${res.kind}):`, e.message)
-    }
+    console.warn(`Unable to add node for resource ${res.metadata.name} (${res.kind}):`, e.message)
   }
 }
 
@@ -500,7 +498,7 @@ function resolveIconPath(res, colourSuffix) {
  * @param {Resource} res The k8s resource to create a node for
  * @returns {ResNode} The G6 node object to be added to the graph
  */
-function makeNode(res) {
+export function makeNode(res) {
   let label = res.metadata.name
 
   if (getConfig().shortenNames && res.metadata && res.metadata.labels) {
