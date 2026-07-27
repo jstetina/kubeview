@@ -862,7 +862,7 @@ Alpine.data('mainApp', () => ({
         }
       }
 
-      if (focusNodeIds && focusNodeIds.length > 0) {
+      if (focusNodeIds && focusNodeIds.length > 0 && !this.showAncestors) {
         await this.focusOnNodes(focusNodeIds)
       } else {
         await fitToVisible(graph, true)
@@ -903,6 +903,7 @@ Alpine.data('mainApp', () => ({
     this._matchedUids = matchedUids
 
     if (this.showAncestors) {
+      console.log(`[searchAndExpandPaths] showAncestors=true, expanding paths for ${matchedUids.size} nodes`)
       for (const uid of matchedUids) {
         expandPathTo(uid)
       }
