@@ -804,10 +804,13 @@ Alpine.data('mainApp', () => ({
       const pathUids = new Set()
       for (const uid of this._highlightedNodes) {
         pathUids.add(uid)
-        for (const ancestor of getAncestorChain(uid)) {
+        const chain = getAncestorChain(uid)
+        console.log(`[showAncestors] node=${uid}, ancestors=${chain.length}`, chain.map(a => getResById(a)?.kind + '/' + getResById(a)?.metadata?.name))
+        for (const ancestor of chain) {
           pathUids.add(ancestor)
         }
       }
+      console.log(`[showAncestors] pathUids total: ${pathUids.size}`)
       visibleUids = pathUids
     } else if (this._highlightedNodes.size > 0) {
       for (const uid of this._highlightedNodes) {

@@ -368,6 +368,9 @@ export function expandPathTo(targetUid) {
 export function getAncestorChain(targetUid) {
   const chain = []
   let current = parentMap.get(targetUid)
+  if (!current) {
+    console.warn(`[getAncestorChain] no parent for ${targetUid}, parentMap size=${parentMap.size}`)
+  }
   while (current) {
     chain.push(current)
     current = parentMap.get(current)
