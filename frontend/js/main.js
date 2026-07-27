@@ -45,10 +45,7 @@ export const graph = new Graph({
   data: {},
   zoomRange: [0.1, 10],
   padding: 25,
-  animation: {
-    duration: 250,
-    delay: 0,
-  },
+  animation: false,
   background: '#0a0b0d',
 
   // Node defaults
@@ -837,7 +834,6 @@ Alpine.data('mainApp', () => ({
     try {
       graph.setLayout(dagreLayout)
       await graph.render()
-
       await graph.layout()
 
       // Highlight matched/filtered nodes with a bright outline (after layout to not get overwritten)
